@@ -1,0 +1,52 @@
+name: Chamber Terraform evidence
+description: Streams Terraform plan or post-apply state evidence to Chamber using GitHub Actions OIDC.
+author: Chamber Security
+
+inputs:
+  evidence:
+    description: Terraform evidence kind (plan or state).
+    required: true
+  working-directory:
+    description: Repository-relative Terraform root.
+    required: false
+    default: .
+  plan-file:
+    description: Saved binary plan path, relative to the working directory.
+    required: false
+  instance:
+    description: Stable discriminator when one Terraform root is applied to multiple states.
+    required: false
+  source-ref:
+    description: Active Source ref used only to resolve same-directory ambiguity.
+    required: false
+  apply-outcome:
+    description: Outcome of the preceding apply step (success, failure, or cancelled).
+    required: false
+  failure-mode:
+    description: Warn without changing the Terraform outcome, or fail this Action step.
+    required: false
+    default: warn
+  endpoint:
+    description: Advanced HTTPS endpoint override for tunnel and integration testing.
+    required: false
+    default: https://api.chamber.security/integrations/github-actions/terraform-evidence
+
+outputs:
+  status:
+    description: Safe ingestion status.
+  invocation-id:
+    description: Chamber evidence invocation identifier, when allocated.
+  revision-id:
+    description: Reduced plan or state revision identifier, when accepted.
+  assessment-id:
+    description: Estate assessment identifier, when available.
+  analysis-status:
+    description: Current analysis coordination status.
+
+runs:
+  using: node24
+  main: dist/index.js
+
+branding:
+  icon: shield
+  color: purple
