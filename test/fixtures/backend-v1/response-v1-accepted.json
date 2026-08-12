@@ -1,0 +1,10 @@
+{
+  "data": {
+    "invocation_id": "c7e7e9ef-a483-4a0c-b7e2-4f130d8a47ab",
+    "evidence_kind": "plan",
+    "status": "accepted",
+    "revision_id": "84d8e2eb-7880-41ad-a153-582988136c18",
+    "analysis_status": "pending_snapshot",
+    "diagnostics": []
+  }
+}

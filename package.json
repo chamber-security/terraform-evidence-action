@@ -9,9 +9,11 @@
   },
   "scripts": {
     "build": "npm run typecheck && ncc build src/index.ts -o dist --minify --source-map --license licenses.txt",
+    "bundle:check": "npm run build && git diff --exit-code -- dist",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "tsx --test test/**/*.test.ts",
+    "test:coverage": "tsx --test --experimental-test-coverage test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

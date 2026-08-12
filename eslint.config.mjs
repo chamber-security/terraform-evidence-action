@@ -22,4 +22,14 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ["test/**/*.ts"],
+    rules: {
+      "@typescript-eslint/require-await": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_" },
+      ],
+    },
+  },
 );

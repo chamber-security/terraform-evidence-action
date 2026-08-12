@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "submission_id": "018f5f36-88df-7a95-9e42-2bc2f09da610",
+  "evidence_kind": "plan",
+  "working_directory": "terraform/prod",
+  "instance": "prod",
+  "terraform_workspace": "prod",
+  "checkout_sha": "0123456789abcdef0123456789abcdef01234567",
+  "github_sha": "89abcdef0123456789abcdef0123456789abcdef",
+  "pull_request_number": 42,
+  "pull_request_head_sha": "0123456789abcdef0123456789abcdef01234567",
+  "pull_request_base_sha": "fedcba9876543210fedcba9876543210fedcba98",
+  "github_job": "terraform-plan-prod",
+  "capture_started_at": "2026-08-12T10:11:12Z",
+  "capture_status": "pending",
+  "reported_plan_outcome": "success",
+  "action_version": "1.0.0"
+}
