@@ -13,7 +13,7 @@ import type { CommandRunner, ShowProcess } from "../src/command";
 import type { StartV1 } from "../src/types";
 import { MemoryDestination, showProcess } from "./helpers";
 
-const start: Omit<StartV1, "capture_started_at" | "capture_status"> = {
+const start: StartV1 = {
   schema_version: 1,
   submission_id: "018f5f36-88df-7a95-9e42-2bc2f09da610",
   evidence_kind: "plan",
@@ -27,7 +27,9 @@ const start: Omit<StartV1, "capture_started_at" | "capture_status"> = {
   pull_request_base_sha: "fedcba9876543210fedcba9876543210fedcba98",
   github_job: "terraform-plan-prod",
   reported_plan_outcome: "success",
-  action_version: "1.0.1",
+  action_version: "1.0.2",
+  capture_started_at: "2026-08-12T10:11:12.000Z",
+  capture_status: "pending",
 };
 
 function bodyParts(
@@ -74,9 +76,7 @@ const selected: WorkspaceSelection = {
   captureAllowed: true,
 };
 
-function startWithSelectorShape(
-  shape: "explicit" | "unknown",
-): Omit<StartV1, "capture_started_at" | "capture_status"> {
+function startWithSelectorShape(shape: "explicit" | "unknown"): StartV1 {
   const shaped = { ...start };
   delete shaped.terraform_workspace;
   if (shape === "unknown") delete shaped.instance;
@@ -86,10 +86,7 @@ function startWithSelectorShape(
 void test("streams ordered start, gzip evidence, and succeeded completion", async () => {
   const destination = new MemoryDestination();
   const controller = new AbortController();
-  const timestamps = [
-    new Date("2026-08-12T10:11:12Z"),
-    new Date("2026-08-12T10:11:18Z"),
-  ];
+  const timestamps = [new Date("2026-08-12T10:11:18Z")];
   const result = await writeCapture(
     destination,
     "fixture-boundary",
