@@ -28,17 +28,15 @@ const actionCore: ActionCore = {
   },
 };
 
-if (require.main === module) {
-  const cancellation = new AbortController();
-  const cancel = (): void => {
-    cancellation.abort();
-  };
-  process.once("SIGINT", cancel);
-  process.once("SIGTERM", cancel);
-  void runAction({ core: actionCore, signal: cancellation.signal }).finally(
-    () => {
-      process.off("SIGINT", cancel);
-      process.off("SIGTERM", cancel);
-    },
-  );
-}
+const cancellation = new AbortController();
+const cancel = (): void => {
+  cancellation.abort();
+};
+process.once("SIGINT", cancel);
+process.once("SIGTERM", cancel);
+void runAction({ core: actionCore, signal: cancellation.signal }).finally(
+  () => {
+    process.off("SIGINT", cancel);
+    process.off("SIGTERM", cancel);
+  },
+);

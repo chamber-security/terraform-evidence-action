@@ -27,7 +27,7 @@ const start: Omit<StartV1, "capture_started_at" | "capture_status"> = {
   pull_request_base_sha: "fedcba9876543210fedcba9876543210fedcba98",
   github_job: "terraform-plan-prod",
   reported_plan_outcome: "success",
-  action_version: "1.0.0",
+  action_version: "1.0.1",
 };
 
 function bodyParts(
