@@ -1,165 +1,222 @@
 # Chamber Terraform evidence Action
 
-This public JavaScript Action streams documented `terraform show -json` plan or
-post-apply state evidence from your GitHub runner to Chamber. GitHub Actions OIDC
-authenticates the installed repository, so there is no Chamber secret, organization
-ID, Source ID, binding ID, backend credential, or second Chamber-console setup step.
+Add this Action to an existing Terraform workflow to send plan and post-apply
+evidence to Chamber. Plan evidence makes Chamber's pull-request analysis more
+precise; state evidence lets Chamber reconcile what Terraform reports after an
+apply.
 
-The Action requires Terraform and a checked-out Git repository. It runs natively on
-GitHub-hosted or self-hosted runners using GitHub's Node 24 Action runtime; there is no
-Node setup step. It does not install Terraform.
+The Action authenticates with GitHub Actions OIDC. You do not need a Chamber API
+token, a Chamber ID, another webhook, or a Marketplace installation.
 
-## Plan evidence
+## Before you start
 
-Save the binary plan and invoke Chamber immediately afterwards. The Action never
-uploads the binary file; it runs `terraform show -json <plan-file>` and streams its
-stdout.
+Make sure that:
+
+- normal GitHub onboarding is complete in Chamber: the GitHub App installation is
+  connected to the correct Chamber organization, the repository is selected and
+  active, and the Terraform root appears as an active Source;
+- the workflow checks out the repository and makes `terraform` available in
+  `PATH`; and
+- the workflow or job grants `contents: read` and `id-token: write`.
 
 ```yaml
 permissions:
   contents: read
   id-token: write
+```
 
+If your organization restricts which Actions may run, allow
+`chamber-security/terraform-evidence-action` in the organization or repository's
+GitHub Actions policy.
+
+The Action runs on GitHub-hosted and self-hosted runners using GitHub's native
+JavaScript Action runtime. It does not install Terraform or check out the
+repository for you. GitHub Enterprise Server is not supported in v1.
+
+## Send plan evidence
+
+Save a Terraform plan, then run the Action immediately after the successful plan
+step. `plan-file` is relative to `working-directory`.
+
+```yaml
 steps:
   - uses: actions/checkout@v6
+
   - uses: hashicorp/setup-terraform@v4
 
+  - name: Terraform init
+    working-directory: terraform
+    run: terraform init -input=false
+
   - id: plan
-    working-directory: terraform/${{ matrix.environment }}
-    run: terraform plan -out=tfplan
+    name: Terraform plan
+    working-directory: terraform
+    run: terraform plan -input=false -out=tfplan
 
   - name: Send Terraform plan evidence to Chamber
     if: ${{ always() && steps.plan.outcome == 'success' }}
     uses: chamber-security/terraform-evidence-action@v1
     with:
       evidence: plan
-      working-directory: terraform/${{ matrix.environment }}
+      working-directory: terraform
       plan-file: tfplan
 ```
 
-Plan evidence is candidate-only. It can make the matching exact-commit PR analysis
-more precise, including known cardinality, values, deletes, and replacements, but it
-never becomes canonical state and never proves an apply happened.
+Plan evidence improves analysis for the matching commit. It does not tell Chamber
+that the plan was applied.
 
-## Post-apply state evidence
+## Send post-apply state evidence
 
-Invoke the same Action after apply with `always()` so a failed or partial apply can
-still report the complete state observable at capture time. A failed `terraform show`
-records only a safe failed-capture receipt; it cannot change currentness.
+Run the Action after `terraform apply`. Keep `always()` in the condition so Chamber
+can receive the state visible after a failed or partial apply as well as after a
+successful apply.
 
 ```yaml
 - id: apply
-  working-directory: terraform/${{ matrix.environment }}
-  run: terraform apply -auto-approve tfplan
+  name: Terraform apply
+  working-directory: terraform
+  run: terraform apply -input=false -auto-approve tfplan
 
 - name: Send post-apply state evidence to Chamber
   if: ${{ always() && steps.apply.outcome != 'skipped' }}
   uses: chamber-security/terraform-evidence-action@v1
   with:
     evidence: state
-    working-directory: terraform/${{ matrix.environment }}
+    working-directory: terraform
     apply-outcome: ${{ steps.apply.outcome }}
 ```
 
-State is applied-presence and provider-identity evidence for one binding. Active
-Source HCL remains intended configuration and cloud observation remains observed
-reality. Chamber records the reported apply outcome honestly.
+The Action reports the apply outcome alongside the state evidence. It never changes
+a failed Terraform apply into a successful one.
 
-## Directories, workspaces, and `instance`
+You can add either evidence step or both. For the most precise post-apply analysis,
+keep the plan, plan evidence, apply, and state evidence in the same workflow run,
+using the same `working-directory` and `instance`. Chamber accepts evidence from
+separate workflow runs independently, but cannot associate the later apply with the
+earlier plan.
 
-`working-directory` is repository-relative and defaults to `.`. GitHub expands
-expressions before the Action receives them. Absolute paths, `..` escapes, symlinked
-path components, a symlinked plan file, and any path resolving outside
-`GITHUB_WORKSPACE` are rejected.
+## Terraform roots and instances
 
-Different Terraform roots need no instance:
-
-```yaml
-working-directory: terraform/${{ matrix.environment }}
-```
-
-If one root is independently applied to multiple states, pass a stable instance:
+Set `working-directory` to the repository-relative Terraform root. For repositories
+with one root per environment, the directory already distinguishes them:
 
 ```yaml
-working-directory: terraform
-instance: ${{ matrix.environment }}
+with:
+  evidence: plan
+  working-directory: terraform/${{ matrix.environment }}
+  plan-file: tfplan
 ```
 
-Without an explicit instance, a non-default Terraform workspace becomes the
-instance; the default workspace uses Chamber's implicit default selector. If
-workspace discovery fails, state capture ends safely without guessing. Plan evidence
-may be retained with an unknown target but will not be selected for an instance.
+If the same directory is independently applied to multiple states, provide a stable
+`instance` such as `dev`, `staging`, or `prod`:
 
-Two opaque backends using the same repository directory and default workspace are
-indistinguishable in documented `terraform show -json`. Chamber cannot always warn
-about this case. Supply `instance`; the Action deliberately does not inspect backend
-metadata or run `terraform state pull`.
+```yaml
+with:
+  evidence: state
+  working-directory: terraform
+  instance: ${{ matrix.environment }}
+  apply-outcome: ${{ steps.apply.outcome }}
+```
 
-Use `source-ref` only when the same directory has multiple active long-lived Chamber
-Sources and the actual workflow ref cannot select the intended track. It accepts the
-Source's ref, never a Chamber Source ID, and cannot make an unverified checkout ref
-authoritative.
+When `instance` is omitted, the Action uses a non-default Terraform workspace when
+one is active. The default workspace is treated as the default instance. Set
+`instance` explicitly when multiple backends use the same directory and default
+workspace, because those states cannot otherwise be distinguished reliably.
 
-## Branch behavior
+Use `source-ref` only when Chamber reports that the same directory matches multiple
+active Source refs and the workflow ref does not identify the intended one. Supply
+the ref shown in Chamber, not a Chamber Source ID.
 
-Plans from pull request branches remain proposed evidence and do not create an
-off-source execution finding. Post-apply state is admissible from any branch or tag.
-Chamber compares verified execution provenance with all currently active Sources:
-registered alternate Sources are intended, while current off-source instances or
-attributable changes can warn. A no-op off-source apply records history without
-marking every resource changed. When active Source facts catch up, current warnings
-resolve and execution history remains.
+## Inputs
 
-Do not combine `pull_request_target` with checkout of untrusted pull-request code.
+| Input               | Required  | Default     | Description                                                                                          |
+| ------------------- | --------- | ----------- | ---------------------------------------------------------------------------------------------------- |
+| `evidence`          | yes       | —           | Evidence to send: `plan` or `state`.                                                                 |
+| `working-directory` | no        | `.`         | Terraform root, relative to the repository workspace.                                                |
+| `plan-file`         | for plans | —           | Saved plan path, relative to `working-directory`.                                                    |
+| `instance`          | no        | inferred    | Stable name when one root is applied to multiple independent states.                                 |
+| `source-ref`        | no        | automatic   | Active Source ref used only to resolve a reported ambiguity.                                         |
+| `apply-outcome`     | for state | —           | Outcome of the apply step: `success`, `failure`, or `cancelled`. Pass `${{ steps.<id>.outcome }}`.   |
+| `failure-mode`      | no        | `warn`      | `warn` reports an evidence error without adding another failing step; `error` fails the Action step. |
+| `endpoint`          | no        | Chamber API | Chamber-provided endpoint override. Leave unset for normal use.                                      |
 
-## Inputs and outputs
+`working-directory` and `plan-file` must remain inside `GITHUB_WORKSPACE`. Absolute
+paths, paths that escape with `..`, and paths containing symlinks are rejected.
 
-| Input               | Required | Default     | Meaning                                                                      |
-| ------------------- | -------- | ----------- | ---------------------------------------------------------------------------- |
-| `evidence`          | yes      | —           | `plan` or `state`                                                            |
-| `working-directory` | no       | `.`         | Repository-relative Terraform root                                           |
-| `plan-file`         | plan     | —           | Saved binary plan path relative to the root                                  |
-| `instance`          | no       | inferred    | Stable multiple-state discriminator                                          |
-| `source-ref`        | no       | automatic   | Active Source ref for rare ambiguity                                         |
-| `apply-outcome`     | state    | —           | `success`, `failure`, or `cancelled`; `skipped` is rejected                  |
-| `failure-mode`      | no       | `warn`      | `warn` preserves Terraform's outcome; `error` fails this step too            |
-| `endpoint`          | no       | Chamber API | Advanced HTTPS tunnel/integration-test override; OIDC audience never changes |
+## Failure behavior
 
-Outputs are `status`, `invocation-id`, optional `revision-id`, optional
-`assessment-id`, and `analysis-status`. Chamber diagnostics become safe GitHub
-notice/warning/error annotations. They never contain Terraform values or raw stderr.
+The default `failure-mode: warn` keeps an evidence problem from obscuring the
+Terraform result. Use `failure-mode: error` if evidence ingestion must succeed for
+the workflow to pass:
 
-## Minimisation and transport
+```yaml
+with:
+  evidence: plan
+  working-directory: terraform
+  plan-file: tfplan
+  failure-mode: error
+```
 
-Before starting Terraform, the Action sends the bounded `start` metadata to a
-Chamber preflight with a fresh GitHub OIDC token for the exact fixed audience.
-Chamber validates the immutable repository, live installation, workflow context and
-metadata, then returns a short-lived request-bound grant. The Action marks that grant
-as a runner secret, obtains a second fresh OIDC token, and begins the multipart
-upload. This explicit handshake works through ordinary HTTP proxies and Cloudflare;
-it does not rely on intermediaries relaying HTTP `100 Continue`.
+Chamber reports safe notices, warnings, and errors in the workflow log. If a network
+failure leaves the upload result unclear, rerun the job rather than retrying the
+upload in a shell loop.
 
-Only a failed preflight can be retried. Once any upload body byte may have been
-consumed, a disconnect is reported as ambiguous and a new Action execution must
-create a fresh submission.
+## Outputs
 
-Terraform stdout is streamed through gzip into the ordered
-`start`/`evidence`/`completion` multipart protocol. Raw JSON, OIDC tokens, plan files,
-variables, outputs, Terraform values, and stderr are never logged or stored by this
-Action. Chamber synchronously validates and reduces the document and does not retain
-the raw payload. The transport proves GitHub issued a token to the admitted
-repository; checkout/outcome/evidence association remains client-attested rather than
-cryptographic proof of a local command.
+Most workflows do not need to consume Action outputs. They are available for step
+summaries and support diagnostics:
 
-## Pinning
+| Output            | Description                                                    |
+| ----------------- | -------------------------------------------------------------- |
+| `status`          | Safe ingestion result.                                         |
+| `invocation-id`   | Receipt identifier to include when contacting Chamber support. |
+| `revision-id`     | Accepted evidence receipt, when one was created.               |
+| `assessment-id`   | Post-apply assessment receipt, when available.                 |
+| `analysis-status` | Current Chamber analysis status.                               |
 
-`@v1` follows compatible v1 releases. For strict supply-chain controls, pin the full
-immutable commit SHA and use release notes or Dependabot to update it deliberately:
+For example, with `id: chamber_plan`, read the status as
+`${{ steps.chamber_plan.outputs.status }}`.
+
+## Security and privacy
+
+- Authentication uses short-lived GitHub Actions OIDC credentials; do not create or
+  store a Chamber secret in GitHub.
+- The Action sends Terraform's documented JSON representation to Chamber over
+  HTTPS. It does not upload the binary plan or request Terraform backend or provider
+  credentials.
+- The Action does not log the Terraform JSON, Terraform values, OIDC credentials, or
+  raw Terraform stderr. Chamber reduces the evidence during the request and does not
+  retain the raw document.
+- Diagnostics and Action outputs do not contain Terraform values.
+- Do not use `pull_request_target` to check out and execute untrusted pull-request
+  code.
+
+## Version pinning
+
+Marketplace publication is not required. Reference the public repository directly:
+
+```yaml
+uses: chamber-security/terraform-evidence-action@v1
+```
+
+`@v1` follows compatible v1 releases. If your supply-chain policy requires immutable
+dependencies, pin the complete commit SHA and update it deliberately:
 
 ```yaml
 uses: chamber-security/terraform-evidence-action@<full-commit-sha>
 ```
 
-Release integrity and the committed bundle procedure are documented in
-[RELEASING.md](RELEASING.md); vulnerability reporting is in
-[SECURITY.md](SECURITY.md).
+Security issues should be reported as described in [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+| Problem                                          | What to check                                                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub cannot request an OIDC token              | The workflow or job has `id-token: write`.                                                                                            |
+| Chamber rejects the repository                   | The Chamber GitHub App is active and the repository remains selected in its installation.                                             |
+| GitHub says the Action is not allowed            | Add `chamber-security/terraform-evidence-action` to the organization's Actions allow-list.                                            |
+| `terraform` cannot be found                      | Run `hashicorp/setup-terraform` or install Terraform before this Action.                                                              |
+| A path is rejected                               | Use repository-relative, non-symlinked paths contained by `GITHUB_WORKSPACE`.                                                         |
+| Chamber reports an ambiguous instance            | Set a stable `instance` for each independently applied state.                                                                         |
+| Chamber reports an ambiguous Source              | Set `source-ref` to the intended active ref shown in Chamber.                                                                         |
+| An upload result is ambiguous after a disconnect | Rerun the workflow job. If the problem continues, give Chamber support the workflow run URL and any non-empty `invocation-id` output. |
