@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import test from "node:test";
 
 import { AmbiguousTransportError } from "../src/errors";
 import { writeWithBackpressure } from "../src/multipart";
 import { submitWithFreshOIDC } from "../src/transport";
+import type { StartV1 } from "../src/types";
 import { fakeJWT } from "./helpers";
 
 const material = {
@@ -13,6 +14,41 @@ const material = {
   workingDirectory: "terraform/prod",
   selector: "prod",
 };
+
+const start: StartV1 = {
+  schema_version: 1,
+  submission_id: material.submissionID,
+  evidence_kind: "plan",
+  working_directory: material.workingDirectory,
+  instance: "prod",
+  checkout_sha: "0123456789abcdef0123456789abcdef01234567",
+  github_sha: "0123456789abcdef0123456789abcdef01234567",
+  capture_started_at: "2026-08-13T08:00:00.000Z",
+  capture_status: "pending",
+  reported_plan_outcome: "success",
+  action_version: "1.0.2",
+};
+
+const startDigest =
+  "sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const grantPayload = Buffer.from(
+  JSON.stringify({
+    admitted_at: "2026-08-13T08:00:00Z",
+    ordinal: 41,
+    expires_at: "2026-08-13T08:02:00Z",
+  }),
+).toString("base64url");
+const grant = `v1.${grantPayload}.${"a".repeat(43)}`;
+
+function grantResponse(): string {
+  return JSON.stringify({
+    data: {
+      grant,
+      start_digest: startDigest,
+      expires_at: "2026-08-13T08:02:00Z",
+    },
+  });
+}
 
 function token(jti: string): string {
   return fakeJWT({
@@ -41,60 +77,96 @@ async function close(server: Server): Promise<void> {
   );
 }
 
-void test("authenticates headers before server sends 100 Continue and starts body", async () => {
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk as Uint8Array));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+void test("completes authenticated metadata preflight before starting Terraform body", async () => {
   const events: string[] = [];
-  let body = "";
-  const server = createServer();
-  server.on("checkContinue", (request, response) => {
-    events.push("server_headers");
-    assert.match(request.headers.authorization ?? "", /^Bearer /u);
-    assert.equal(
-      request.headers["idempotency-key"],
-      "sha256=e8493bb4610c15c987d761986e3f61edb464a9e06f5f78e2b9280bc06bbea17a",
-    );
-    assert.equal(request.headers.expect, "100-continue");
-    response.writeContinue();
+  const authorizations: string[] = [];
+  let uploadBody = "";
+  const server = createServer((request, response) => {
+    authorizations.push(request.headers.authorization ?? "");
+    if (request.url === "/evidence/preflight") {
+      events.push("server_preflight");
+      void readBody(request).then((body) => {
+        assert.deepEqual(JSON.parse(body), start);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(grantResponse());
+      });
+      return;
+    }
+    assert.equal(request.url, "/evidence");
+    assert.equal(request.headers.expect, undefined);
+    assert.equal(request.headers["x-chamber-evidence-grant"], grant);
+    assert.equal(request.headers["x-chamber-start-digest"], startDigest);
+    events.push("server_upload_headers");
     request.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
+      uploadBody += chunk.toString("utf8");
     });
     request.on("end", () => {
-      events.push("server_body");
+      events.push("server_upload_body");
       response.writeHead(202, { "content-type": "application/json" });
       response.end('{"data":{"ok":true}}');
     });
   });
   const endpoint = await listen(server);
+  const tokens = [token("preflight"), token("upload")];
+  const protectedValues: string[] = [];
   try {
     const result = await submitWithFreshOIDC({
       endpoint,
+      start,
       material,
-      getOIDCToken: async () => token("one"),
+      now: () => new Date(start.capture_started_at),
+      getOIDCToken: async () => tokens.shift() ?? "",
+      protectSecret: (value) => protectedValues.push(value),
       writeBody: async (request, _boundary, signal) => {
-        events.push("client_body");
+        events.push("client_upload_body");
         await writeWithBackpressure(request, "streamed-body", signal);
         return "captured";
       },
-      limits: { continueTimeoutMs: 5000, requestTimeoutMs: 5000 },
+      limits: { preflightTimeoutMs: 5000, requestTimeoutMs: 5000 },
     });
     assert.equal(result.response.statusCode, 202);
     assert.equal(result.capture, "captured");
-    assert.equal(body, "streamed-body");
-    assert.deepEqual(events, ["server_headers", "client_body", "server_body"]);
+    assert.equal(uploadBody, "streamed-body");
+    assert.deepEqual(events, [
+      "server_preflight",
+      "client_upload_body",
+      "server_upload_headers",
+      "server_upload_body",
+    ]);
+    assert.equal(new Set(authorizations).size, 2);
+    assert.deepEqual(protectedValues, [grant]);
   } finally {
     await close(server);
   }
 });
 
-void test("retries only before body and fetches a fresh OIDC token", async () => {
-  let connections = 0;
-  const server = createServer();
-  server.on("checkContinue", (request, response) => {
-    connections += 1;
-    if (connections === 1) {
-      request.socket.destroy();
+void test("retries only the safe preflight with fresh tokens before capture", async () => {
+  let preflights = 0;
+  let uploads = 0;
+  const preflightStarts: StartV1[] = [];
+  const server = createServer((request, response) => {
+    if (request.url === "/evidence/preflight") {
+      preflights += 1;
+      void readBody(request).then((body) => {
+        preflightStarts.push(JSON.parse(body) as StartV1);
+        if (preflights === 1) {
+          request.socket.destroy();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(grantResponse());
+      });
       return;
     }
-    response.writeContinue();
+    uploads += 1;
     request.resume();
     request.on("end", () => {
       response.writeHead(202, { "content-type": "application/json" });
@@ -102,81 +174,100 @@ void test("retries only before body and fetches a fresh OIDC token", async () =>
     });
   });
   const endpoint = await listen(server);
-  const tokens = [token("first"), token("second")];
-  const keys: string[] = [];
+  const tokens = [token("first"), token("second"), token("third")];
+  const attemptTimes = [
+    new Date("2026-08-13T08:00:00Z"),
+    new Date("2026-08-13T08:01:01Z"),
+  ];
   let bodyCalls = 0;
+  let authorizedStart: StartV1 | undefined;
   try {
     const result = await submitWithFreshOIDC({
       endpoint,
+      start,
       material,
-      getOIDCToken: async () => {
-        const value = tokens.shift();
-        if (value === undefined) throw new Error("missing token");
-        return value;
-      },
-      writeBody: async (request, _boundary, signal) => {
+      getOIDCToken: async () => tokens.shift() ?? "",
+      now: () => attemptTimes.shift() ?? new Date("2026-08-13T08:01:01Z"),
+      writeBody: async (request, _boundary, signal, successfulStart) => {
         bodyCalls += 1;
-        keys.push(String(request.getHeader("idempotency-key")));
+        authorizedStart = successfulStart;
         await writeWithBackpressure(request, "body", signal);
         return undefined;
       },
       sleep: async () => undefined,
       limits: {
         retryAttempts: 2,
-        continueTimeoutMs: 5000,
+        preflightTimeoutMs: 5000,
         requestTimeoutMs: 5000,
       },
     });
     assert.equal(result.attempts, 2);
+    assert.equal(preflights, 2);
+    assert.equal(uploads, 1);
     assert.equal(bodyCalls, 1);
     assert.equal(tokens.length, 0);
-    assert.deepEqual(keys, [
-      "sha256=e8493bb4610c15c987d761986e3f61edb464a9e06f5f78e2b9280bc06bbea17a",
-    ]);
+    assert.deepEqual(
+      preflightStarts.map((value) => value.capture_started_at),
+      ["2026-08-13T08:00:00.000Z", "2026-08-13T08:01:01.000Z"],
+    );
+    assert.equal(
+      authorizedStart?.capture_started_at,
+      "2026-08-13T08:01:01.000Z",
+    );
   } finally {
     await close(server);
   }
 });
 
-void test("fails closed when GitHub reissues the same token identifier", async () => {
-  let connections = 0;
-  const server = createServer();
-  server.on("checkContinue", (request) => {
-    connections += 1;
-    request.socket.destroy();
+void test("fails closed when GitHub reissues the preflight token for upload", async () => {
+  let uploads = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/evidence/preflight") {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(grantResponse());
+      });
+      return;
+    }
+    uploads += 1;
+    response.end();
   });
   const endpoint = await listen(server);
   try {
     await assert.rejects(
       submitWithFreshOIDC({
         endpoint,
+        start,
         material,
         getOIDCToken: async () => token("same-jti"),
         writeBody: async () => undefined,
-        sleep: async () => undefined,
-        limits: {
-          retryAttempts: 2,
-          continueTimeoutMs: 5000,
-          requestTimeoutMs: 5000,
-        },
       }),
       (error: unknown) =>
         error instanceof Error &&
         "code" in error &&
         error.code === "oidc_token_reused",
     );
-    assert.equal(connections, 1);
+    assert.equal(uploads, 0);
   } finally {
     await close(server);
   }
 });
 
-void test("reports ambiguity and never retries after body starts", async () => {
-  let connections = 0;
-  const server = createServer();
-  server.on("checkContinue", (request, response) => {
-    connections += 1;
-    response.writeContinue();
+void test("reports ambiguity and never retries after upload body starts", async () => {
+  let preflights = 0;
+  let uploads = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/evidence/preflight") {
+      preflights += 1;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(grantResponse());
+      });
+      return;
+    }
+    uploads += 1;
     request.once("data", () => request.socket.destroy());
   });
   const endpoint = await listen(server);
@@ -185,6 +276,7 @@ void test("reports ambiguity and never retries after body starts", async () => {
     await assert.rejects(
       submitWithFreshOIDC({
         endpoint,
+        start,
         material,
         getOIDCToken: async () => {
           tokenCalls += 1;
@@ -201,52 +293,49 @@ void test("reports ambiguity and never retries after body starts", async () => {
         sleep: async () => undefined,
         limits: {
           retryAttempts: 3,
-          continueTimeoutMs: 5000,
+          preflightTimeoutMs: 5000,
           requestTimeoutMs: 5000,
         },
       }),
       AmbiguousTransportError,
     );
-    assert.equal(connections, 1);
-    assert.equal(tokenCalls, 1);
+    assert.equal(preflights, 1);
+    assert.equal(uploads, 1);
+    assert.equal(tokenCalls, 2);
   } finally {
     await close(server);
   }
 });
 
-void test("uses bounded continue timeout when an intermediary sends no interim response", async () => {
-  let body = "";
+void test("returns a preflight rejection without starting Terraform or fetching an upload token", async () => {
   const server = createServer((request, response) => {
-    request.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-    });
+    assert.equal(request.url, "/evidence/preflight");
+    request.resume();
     request.on("end", () => {
-      response.writeHead(202, { "content-type": "application/json" });
-      response.end("{}");
-    });
-  });
-  server.on("checkContinue", (request, response) => {
-    request.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-    });
-    request.on("end", () => {
-      response.writeHead(202, { "content-type": "application/json" });
-      response.end("{}");
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end('{"code":"github_actions_repository_not_admitted"}');
     });
   });
   const endpoint = await listen(server);
+  let tokenCalls = 0;
+  let bodyCalls = 0;
   try {
-    await submitWithFreshOIDC({
+    const result = await submitWithFreshOIDC({
       endpoint,
+      start,
       material,
-      getOIDCToken: async () => token("one"),
-      writeBody: async (request, _boundary, signal) => {
-        await writeWithBackpressure(request, "fallback-body", signal);
+      getOIDCToken: async () => {
+        tokenCalls += 1;
+        return token(String(tokenCalls));
+      },
+      writeBody: async () => {
+        bodyCalls += 1;
         return undefined;
       },
-      limits: { continueTimeoutMs: 10, requestTimeoutMs: 5000 },
     });
-    assert.equal(body, "fallback-body");
+    assert.equal(result.response.statusCode, 403);
+    assert.equal(tokenCalls, 1);
+    assert.equal(bodyCalls, 0);
   } finally {
     await close(server);
   }

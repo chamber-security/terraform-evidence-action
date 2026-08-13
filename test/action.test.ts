@@ -88,6 +88,11 @@ void test("builds exact explicit StartV1 and requests exact OIDC audience", asyn
     newSubmissionID: () => "018f47a1-91e4-7cc5-91fe-2f5f5d7a9d10",
     submit: async (request) => {
       submitted = request;
+      assert.equal(request.start.capture_status, "pending");
+      assert.equal(
+        request.start.capture_started_at,
+        "2026-08-12T10:11:12.000Z",
+      );
       const freshToken = await request.getOIDCToken();
       assert.equal(freshToken, token);
       const destination = new MemoryDestination();
@@ -95,6 +100,7 @@ void test("builds exact explicit StartV1 and requests exact OIDC audience", asyn
         destination as unknown as ClientRequest,
         "action-test-boundary",
         new AbortController().signal,
+        request.start,
       );
       destination.end();
       submittedBody = destination.body().toString("latin1");

@@ -26,7 +26,7 @@ export interface CaptureLimits {
 }
 
 export interface CaptureRequest {
-  start: Omit<StartV1, "capture_started_at" | "capture_status">;
+  start: StartV1;
   evidenceKind: EvidenceKind;
   workingDirectoryAbsolute: string;
   planFile?: string;
@@ -327,12 +327,7 @@ export async function writeCapture(
     boundary,
     signal,
   );
-  const start: StartV1 = {
-    ...request.start,
-    capture_started_at: request.now().toISOString(),
-    capture_status: "pending",
-  };
-  await writer.writeJSONPart("start", start, limits.startBytes);
+  await writer.writeJSONPart("start", request.start, limits.startBytes);
 
   if (!request.selection.captureAllowed) {
     const diagnosticCode =

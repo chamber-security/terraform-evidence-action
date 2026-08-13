@@ -1,4 +1,4 @@
-export const ACTION_VERSION = "1.0.1";
+export const ACTION_VERSION = "1.0.2";
 export const OIDC_AUDIENCE = "https://api.chamber.security/terraform-evidence";
 export const DEFAULT_ENDPOINT =
   "https://api.chamber.security/integrations/github-actions/terraform-evidence";
@@ -12,7 +12,7 @@ export const LIMITS = Object.freeze({
   commandOutputBytes: 4 * 1024,
   evidenceBytes: 64 * 1024 * 1024,
   compressedEvidenceBytes: 68 * 1024 * 1024,
-  continueTimeoutMs: 1500,
+  preflightTimeoutMs: 30 * 1000,
   commandTimeoutMs: 30 * 1000,
   captureTimeoutMs: 10 * 60 * 1000,
   requestTimeoutMs: 12 * 60 * 1000,

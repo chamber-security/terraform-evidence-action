@@ -131,12 +131,17 @@ notice/warning/error annotations. They never contain Terraform values or raw std
 
 ## Minimisation and transport
 
-The Action gets a fresh GitHub OIDC token for the exact fixed Chamber audience on
-each transport attempt. Headers, including repository admission, are checked before
-the body when the route honors HTTP `100 Continue`; a bounded fallback supports
-intermediaries that do not relay the interim response. Retries are allowed only
-before streaming starts. Once any body byte may have been consumed, a disconnect is
-reported as ambiguous and a new Action execution must create a fresh submission.
+Before starting Terraform, the Action sends the bounded `start` metadata to a
+Chamber preflight with a fresh GitHub OIDC token for the exact fixed audience.
+Chamber validates the immutable repository, live installation, workflow context and
+metadata, then returns a short-lived request-bound grant. The Action marks that grant
+as a runner secret, obtains a second fresh OIDC token, and begins the multipart
+upload. This explicit handshake works through ordinary HTTP proxies and Cloudflare;
+it does not rely on intermediaries relaying HTTP `100 Continue`.
+
+Only a failed preflight can be retried. Once any upload body byte may have been
+consumed, a disconnect is reported as ambiguous and a new Action execution must
+create a fresh submission.
 
 Terraform stdout is streamed through gzip into the ordered
 `start`/`evidence`/`completion` multipart protocol. Raw JSON, OIDC tokens, plan files,

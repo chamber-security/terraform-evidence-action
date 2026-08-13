@@ -16,6 +16,7 @@ import {
   type OIDCStableClaims,
 } from "./github";
 import { createMultipartBoundary } from "./multipart";
+import type { StartV1 } from "./types";
 
 export interface HTTPResponse {
   statusCode: number;
@@ -24,7 +25,7 @@ export interface HTTPResponse {
 }
 
 export interface TransportLimits {
-  continueTimeoutMs: number;
+  preflightTimeoutMs: number;
   requestTimeoutMs: number;
   responseBytes: number;
   retryAttempts: number;
@@ -32,12 +33,16 @@ export interface TransportLimits {
 
 export interface SubmitRequest<TCapture> {
   endpoint: URL;
+  start: StartV1;
   material: IdempotencyMaterial;
   getOIDCToken: () => Promise<string>;
+  now?: () => Date;
+  protectSecret?: (value: string) => void;
   writeBody: (
     request: ClientRequest,
     boundary: string,
     signal: AbortSignal,
+    start: StartV1,
   ) => Promise<TCapture>;
   sleep?: (milliseconds: number) => Promise<void>;
   signal?: AbortSignal;
@@ -55,6 +60,11 @@ interface AttemptResult<TCapture> {
   response: HTTPResponse;
   capture?: TCapture;
   bodyStarted: boolean;
+}
+
+interface PreflightGrant {
+  grant: string;
+  startDigest: string;
 }
 
 class AttemptNetworkError extends Error {
@@ -100,10 +110,139 @@ async function readBoundedResponse(
   };
 }
 
-function attemptRequest<TCapture>(
+function preflightURL(endpoint: URL): URL {
+  const result = new URL(endpoint.href);
+  result.pathname = `${result.pathname.replace(/\/$/u, "")}/preflight`;
+  return result;
+}
+
+function preflightRequest(
   endpoint: URL,
   token: string,
   idempotencyKey: string,
+  start: StartV1,
+  limits: TransportLimits,
+  callerSignal: AbortSignal | undefined,
+): Promise<HTTPResponse> {
+  const body = Buffer.from(JSON.stringify(start), "utf8");
+  if (body.length > LIMITS.startBytes) {
+    return Promise.reject(
+      new SafeError(
+        "start_size_limit_exceeded",
+        "Terraform evidence metadata exceeded the Action's safe bound.",
+      ),
+    );
+  }
+  return new Promise<HTTPResponse>((resolve, reject) => {
+    let settled = false;
+    const request = requestForURL(preflightURL(endpoint), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        "content-type": "application/json",
+        "content-length": String(body.length),
+        "idempotency-key": idempotencyKey,
+        "user-agent": `chamber-terraform-evidence-action/${ACTION_VERSION}`,
+      },
+    });
+    const timeout = setTimeout(() => {
+      request.destroy();
+      settleReject(new AttemptNetworkError(false));
+    }, limits.preflightTimeoutMs);
+    timeout.unref();
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    };
+    const settleResolve = (response: HTTPResponse): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(response);
+    };
+    const settleReject = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new AttemptNetworkError(false));
+    };
+    const onCallerAbort = (): void => {
+      request.destroy();
+      settleReject(new AttemptNetworkError(false));
+    };
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    if (callerSignal?.aborted === true) {
+      onCallerAbort();
+      return;
+    }
+    request.once("response", (response) => {
+      void readBoundedResponse(response, limits.responseBytes).then(
+        settleResolve,
+        settleReject,
+      );
+    });
+    request.once("error", () => {
+      settleReject(new AttemptNetworkError(false));
+    });
+    request.end(body);
+  });
+}
+
+function parsePreflightGrant(response: HTTPResponse): PreflightGrant {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(response.body.toString("utf8")) as unknown;
+  } catch {
+    throw new SafeError(
+      "preflight_response_invalid",
+      "Chamber returned an invalid Terraform evidence preflight response.",
+    );
+  }
+  if (
+    typeof decoded !== "object" ||
+    decoded === null ||
+    Array.isArray(decoded)
+  ) {
+    throw new SafeError(
+      "preflight_response_invalid",
+      "Chamber returned an invalid Terraform evidence preflight response.",
+    );
+  }
+  const data = (decoded as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new SafeError(
+      "preflight_response_invalid",
+      "Chamber returned an invalid Terraform evidence preflight response.",
+    );
+  }
+  const values = data as Record<string, unknown>;
+  const grant = values.grant;
+  const startDigest = values.start_digest;
+  const expiresAt = values.expires_at;
+  if (
+    typeof grant !== "string" ||
+    !/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(grant) ||
+    grant.length > 256 ||
+    typeof startDigest !== "string" ||
+    !/^sha256=[0-9a-f]{64}$/u.test(startDigest) ||
+    typeof expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(expiresAt))
+  ) {
+    throw new SafeError(
+      "preflight_response_invalid",
+      "Chamber returned an invalid Terraform evidence preflight response.",
+    );
+  }
+  return { grant, startDigest };
+}
+
+function uploadRequest<TCapture>(
+  endpoint: URL,
+  token: string,
+  idempotencyKey: string,
+  preflight: PreflightGrant,
+  start: StartV1,
   writeBody: SubmitRequest<TCapture>["writeBody"],
   limits: TransportLimits,
   callerSignal: AbortSignal | undefined,
@@ -116,14 +255,27 @@ function attemptRequest<TCapture>(
     let bodyCompleted = false;
     let capture: TCapture | undefined;
     const captureAbort = new AbortController();
-    const timers: {
-      continue?: NodeJS.Timeout;
-      request?: NodeJS.Timeout;
-    } = {};
 
+    const request = requestForURL(endpoint, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        "idempotency-key": idempotencyKey,
+        "user-agent": `chamber-terraform-evidence-action/${ACTION_VERSION}`,
+        "x-chamber-evidence-grant": preflight.grant,
+        "x-chamber-start-digest": preflight.startDigest,
+      },
+    });
+    const timeout = setTimeout(() => {
+      captureAbort.abort();
+      request.destroy();
+      settleReject(new AttemptNetworkError(bodyStarted));
+    }, limits.requestTimeoutMs);
+    timeout.unref();
     const cleanup = (): void => {
-      if (timers.continue !== undefined) clearTimeout(timers.continue);
-      if (timers.request !== undefined) clearTimeout(timers.request);
+      clearTimeout(timeout);
       callerSignal?.removeEventListener("abort", onCallerAbort);
     };
     const settleResolve = (response: HTTPResponse): void => {
@@ -141,22 +293,9 @@ function attemptRequest<TCapture>(
       settled = true;
       cleanup();
       reject(
-        error instanceof Error ? error : new Error("transport attempt failed"),
+        error instanceof Error ? error : new AttemptNetworkError(bodyStarted),
       );
     };
-
-    const request = requestForURL(endpoint, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/json",
-        "content-type": `multipart/form-data; boundary=${boundary}`,
-        "idempotency-key": idempotencyKey,
-        "user-agent": `chamber-terraform-evidence-action/${ACTION_VERSION}`,
-        expect: "100-continue",
-      },
-    });
-
     const onCallerAbort = (): void => {
       captureAbort.abort();
       request.destroy();
@@ -168,26 +307,8 @@ function attemptRequest<TCapture>(
       return;
     }
 
-    const beginBody = (): void => {
-      if (bodyStarted || responseSeen || settled) return;
-      bodyStarted = true;
-      if (timers.continue !== undefined) clearTimeout(timers.continue);
-      void writeBody(request, boundary, captureAbort.signal)
-        .then((result) => {
-          capture = result;
-          bodyCompleted = true;
-          request.end();
-        })
-        .catch(() => {
-          request.destroy();
-          if (!responseSeen) settleReject(new AttemptNetworkError(true));
-        });
-    };
-
-    request.once("continue", beginBody);
     request.once("response", (response) => {
       responseSeen = true;
-      if (timers.continue !== undefined) clearTimeout(timers.continue);
       if (bodyStarted && !bodyCompleted) captureAbort.abort();
       void readBoundedResponse(response, limits.responseBytes).then(
         (boundedResponse) => {
@@ -218,15 +339,17 @@ function attemptRequest<TCapture>(
       }
     });
     request.flushHeaders();
-
-    timers.continue = setTimeout(beginBody, limits.continueTimeoutMs);
-    timers.continue.unref();
-    timers.request = setTimeout(() => {
-      captureAbort.abort();
-      request.destroy();
-      settleReject(new AttemptNetworkError(bodyStarted));
-    }, limits.requestTimeoutMs);
-    timers.request.unref();
+    bodyStarted = true;
+    void writeBody(request, boundary, captureAbort.signal, start)
+      .then((result) => {
+        capture = result;
+        bodyCompleted = true;
+        request.end();
+      })
+      .catch(() => {
+        request.destroy();
+        if (!responseSeen) settleReject(new AttemptNetworkError(true));
+      });
   });
 }
 
@@ -246,25 +369,20 @@ export async function submitWithFreshOIDC<TCapture>(
   request: SubmitRequest<TCapture>,
 ): Promise<Submission<TCapture>> {
   const limits: TransportLimits = {
-    continueTimeoutMs:
-      request.limits?.continueTimeoutMs ?? LIMITS.continueTimeoutMs,
+    preflightTimeoutMs:
+      request.limits?.preflightTimeoutMs ?? LIMITS.preflightTimeoutMs,
     requestTimeoutMs:
       request.limits?.requestTimeoutMs ?? LIMITS.requestTimeoutMs,
     responseBytes: request.limits?.responseBytes ?? LIMITS.responseBytes,
     retryAttempts: request.limits?.retryAttempts ?? LIMITS.retryAttempts,
   };
   const sleep = request.sleep ?? defaultSleep;
+  const now = request.now ?? (() => new Date());
   let stableClaims: OIDCStableClaims | undefined;
   let idempotencyKey: string | undefined;
   const seenTokenIdentifiers = new Set<string>();
 
-  for (let attempt = 1; attempt <= limits.retryAttempts; attempt += 1) {
-    if (signalAborted(request.signal)) {
-      throw new SafeError(
-        "action_cancelled",
-        "Terraform evidence capture was cancelled.",
-      );
-    }
+  const freshToken = async (): Promise<string> => {
     let token: string;
     try {
       token = await request.getOIDCToken();
@@ -292,6 +410,17 @@ export async function submitWithFreshOIDC<TCapture>(
         "GitHub changed stable workflow claims during a transport retry.",
       );
     }
+    return token;
+  };
+
+  for (let attempt = 1; attempt <= limits.retryAttempts; attempt += 1) {
+    if (signalAborted(request.signal)) {
+      throw new SafeError(
+        "action_cancelled",
+        "Terraform evidence capture was cancelled.",
+      );
+    }
+    const preflightToken = await freshToken();
     if (idempotencyKey === undefined) {
       throw new SafeError(
         "idempotency_key_unavailable",
@@ -299,13 +428,70 @@ export async function submitWithFreshOIDC<TCapture>(
       );
     }
     const currentIdempotencyKey = idempotencyKey;
+    // No Terraform process or upload body exists yet, so a safe preflight retry
+    // begins a fresh capture attempt. Carry this exact successful Start into the
+    // multipart body so backend token-time admission and grant binding agree.
+    const attemptStart: StartV1 = {
+      ...request.start,
+      capture_started_at: now().toISOString(),
+    };
+
+    let preflightResponse: HTTPResponse;
+    try {
+      preflightResponse = await preflightRequest(
+        request.endpoint,
+        preflightToken,
+        currentIdempotencyKey,
+        attemptStart,
+        limits,
+        request.signal,
+      );
+    } catch (error) {
+      if (!(error instanceof AttemptNetworkError)) throw error;
+      if (signalAborted(request.signal)) {
+        throw new SafeError(
+          "action_cancelled",
+          "Terraform evidence capture was cancelled.",
+        );
+      }
+      if (attempt === limits.retryAttempts) {
+        throw new SafeError(
+          "transport_unavailable",
+          "Chamber could not authorize Terraform evidence capture.",
+        );
+      }
+      await sleep(250 * attempt);
+      continue;
+    }
+    if (
+      retryableStatus(preflightResponse.statusCode) &&
+      attempt < limits.retryAttempts
+    ) {
+      await sleep(250 * attempt);
+      continue;
+    }
+    if (
+      preflightResponse.statusCode < 200 ||
+      preflightResponse.statusCode >= 300
+    ) {
+      return {
+        response: preflightResponse,
+        attempts: attempt,
+        idempotencyKey: currentIdempotencyKey,
+      };
+    }
+    const preflight = parsePreflightGrant(preflightResponse);
+    request.protectSecret?.(preflight.grant);
+    const uploadToken = await freshToken();
 
     let result: AttemptResult<TCapture>;
     try {
-      result = await attemptRequest(
+      result = await uploadRequest(
         request.endpoint,
-        token,
+        uploadToken,
         currentIdempotencyKey,
+        preflight,
+        attemptStart,
         request.writeBody,
         limits,
         request.signal,
@@ -329,15 +515,6 @@ export async function submitWithFreshOIDC<TCapture>(
       await sleep(250 * attempt);
       continue;
     }
-
-    if (
-      !result.bodyStarted &&
-      retryableStatus(result.response.statusCode) &&
-      attempt < limits.retryAttempts
-    ) {
-      await sleep(250 * attempt);
-      continue;
-    }
     return {
       response: result.response,
       ...(result.capture === undefined ? {} : { capture: result.capture }),
@@ -347,6 +524,6 @@ export async function submitWithFreshOIDC<TCapture>(
   }
   throw new SafeError(
     "transport_unavailable",
-    "Chamber could not be reached before evidence streaming began.",
+    "Chamber could not authorize Terraform evidence capture.",
   );
 }

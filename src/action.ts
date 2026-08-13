@@ -166,7 +166,7 @@ export async function executeAction(
   }
   const githubJob = boundedGitHubJob(env.GITHUB_JOB);
 
-  const start: Omit<StartV1, "capture_started_at" | "capture_status"> = {
+  const start: StartV1 = {
     schema_version: 1,
     submission_id: submissionID,
     evidence_kind: inputs.evidence,
@@ -174,6 +174,8 @@ export async function executeAction(
     checkout_sha: checkoutSHA,
     github_sha: githubSHA,
     action_version: ACTION_VERSION,
+    capture_started_at: now().toISOString(),
+    capture_status: "pending",
     ...(selection.instance === undefined
       ? {}
       : { instance: selection.instance }),
@@ -200,6 +202,7 @@ export async function executeAction(
   let bodyInvoked = false;
   const submission = await submit<CaptureResult>({
     endpoint: inputs.endpoint,
+    start,
     material: {
       submissionID,
       evidenceKind: inputs.evidence,
@@ -211,7 +214,11 @@ export async function executeAction(
       dependencies.core.setSecret(token);
       return token;
     },
-    writeBody: async (destination, boundary, signal) => {
+    now,
+    protectSecret: (value) => {
+      dependencies.core.setSecret(value);
+    },
+    writeBody: async (destination, boundary, signal, authorizedStart) => {
       if (bodyInvoked) {
         throw new SafeError(
           "capture_replay_blocked",
@@ -220,7 +227,7 @@ export async function executeAction(
       }
       bodyInvoked = true;
       return await writeCapture(destination, boundary, signal, {
-        start,
+        start: authorizedStart,
         evidenceKind: inputs.evidence,
         workingDirectoryAbsolute: paths.workingDirectoryAbsolute,
         ...(paths.planFile === undefined ? {} : { planFile: paths.planFile }),
