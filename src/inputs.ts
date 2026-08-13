@@ -136,5 +136,8 @@ export function readInputs(getInput: InputReader): ActionInputs {
 }
 
 export function requestedFailureMode(getInput: InputReader): FailureMode {
-  return getInput("failure-mode").trim() === "error" ? "error" : "warn";
+  const value = getInput("failure-mode").trim();
+  // Only a valid, explicit warn may soften failures. Invalid control input is
+  // fail-closed even though readInputs will later emit its bounded diagnostic.
+  return value === "warn" || value === "" ? "warn" : "error";
 }

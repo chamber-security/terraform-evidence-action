@@ -141,3 +141,16 @@ void test("error mode fails the Action with a safe message", async () => {
     "State evidence requires apply-outcome set to success, failure, or cancelled; skipped is not accepted.",
   ]);
 });
+
+void test("invalid failure mode fails closed", async () => {
+  const core = new FakeCore({
+    evidence: "state",
+    "failure-mode": "erorr",
+    "apply-outcome": "success",
+  });
+  await runAction({ core, env: {} });
+  assert.deepEqual(core.failures, [
+    "The failure-mode input must be warn or error.",
+  ]);
+  assert.equal(core.outputs.get("status"), "action_failed");
+});
