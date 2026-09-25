@@ -62,3 +62,30 @@ void test("rejects unsafe endpoint and invalid selector", () => {
       error instanceof SafeError && error.code === "invalid_endpoint",
   );
 });
+
+void test("state requires an explicit production boolean, with no default", () => {
+  for (const value of ["true", "false"]) {
+    assert.equal(
+      read({ evidence: "state", "apply-outcome": "success", production: value })
+        .production,
+      value === "true",
+    );
+  }
+  for (const value of ["", "other", "1", "False", "mixed"]) {
+    assert.throws(
+      () =>
+        read({
+          evidence: "state",
+          "apply-outcome": "success",
+          production: value,
+        }),
+      (error: unknown) =>
+        error instanceof SafeError && error.code === "production_required",
+    );
+  }
+  assert.throws(
+    () => read({ evidence: "plan", "plan-file": "plan", production: "true" }),
+    (error: unknown) =>
+      error instanceof SafeError && error.code === "production_not_allowed",
+  );
+});

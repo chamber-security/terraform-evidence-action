@@ -19,6 +19,9 @@ inputs:
   source-ref:
     description: Active Source ref used only to resolve same-directory ambiguity.
     required: false
+  production:
+    description: Required for state evidence. True if any managed resources are production (including mixed states); false only if entirely non-production.
+    required: false
   apply-outcome:
     description: Outcome of the preceding apply step (success, failure, or cancelled).
     required: false

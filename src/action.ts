@@ -168,6 +168,9 @@ export async function executeAction(
 
   const start: StartV1 = {
     schema_version: 1,
+    ...(inputs.production === undefined
+      ? {}
+      : { production: inputs.production }),
     submission_id: submissionID,
     evidence_kind: inputs.evidence,
     working_directory: paths.workingDirectory,
@@ -197,7 +200,9 @@ export async function executeAction(
       ? { reported_plan_outcome: "success" as const }
       : inputs.applyOutcome === undefined
         ? {}
-        : { reported_apply_outcome: inputs.applyOutcome }),
+        : {
+            reported_apply_outcome: inputs.applyOutcome,
+          }),
   };
   let bodyInvoked = false;
   const submission = await submit<CaptureResult>({

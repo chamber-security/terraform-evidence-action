@@ -120,11 +120,29 @@ export function readInputs(getInput: InputReader): ActionInputs {
     );
   }
 
+  const productionInput = getInput("production").trim();
+  let production: boolean | undefined;
+  if (evidence === "state") {
+    if (productionInput !== "true" && productionInput !== "false") {
+      throw new SafeError(
+        "production_required",
+        "State evidence requires production set explicitly to true or false (true if any resources are production).",
+      );
+    }
+    production = productionInput === "true";
+  } else if (productionInput !== "") {
+    throw new SafeError(
+      "production_not_allowed",
+      "The production input is only valid for state evidence.",
+    );
+  }
+
   const workingDirectory = getInput("working-directory").trim() || ".";
   const endpoint = parseEndpoint(getInput("endpoint").trim());
 
   return {
     evidence,
+    ...(production === undefined ? {} : { production }),
     workingDirectory,
     failureMode,
     endpoint,
