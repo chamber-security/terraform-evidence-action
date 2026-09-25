@@ -10,6 +10,7 @@ export interface ActionInputs {
   instance?: string;
   sourceRef?: string;
   applyOutcome?: ApplyOutcome;
+  production?: boolean;
   failureMode: FailureMode;
   endpoint: URL;
 }
@@ -32,6 +33,7 @@ export interface StartV1 {
   capture_status: "pending";
   reported_plan_outcome?: "success";
   reported_apply_outcome?: ApplyOutcome;
+  production?: boolean;
   action_version: string;
 }
 

@@ -153,6 +153,7 @@ void test("invalid failure mode fails closed", async () => {
     evidence: "state",
     "failure-mode": "erorr",
     "apply-outcome": "success",
+    production: "false",
   });
   await runAction({ core, env: {} });
   assert.deepEqual(core.failures, [
@@ -160,3 +161,86 @@ void test("invalid failure mode fails closed", async () => {
   ]);
   assert.equal(core.outputs.get("status"), "action_failed");
 });
+
+for (const production of [true, false]) {
+  void test(`streams explicit production=${production} with state evidence`, async () => {
+    const root = await workspace();
+    const token = fakeJWT({
+      repository_id: "123456789",
+      run_id: "987654321",
+      run_attempt: "2",
+      check_run_id: "555555",
+      jti: "action-test-jti",
+    });
+    const core = new FakeCore(
+      {
+        evidence: "state",
+        production: String(production),
+        "apply-outcome": "success",
+        "working-directory": "terraform/prod",
+        instance: "prod",
+        "failure-mode": "warn",
+        endpoint: "https://example.test/evidence",
+      },
+      [token],
+    );
+    let submitted: SubmitRequest<unknown> | undefined;
+    let submittedBody = "";
+    const execution = await executeAction({
+      core,
+      env: {
+        GITHUB_WORKSPACE: root,
+        GITHUB_SHA: githubSHA,
+        GITHUB_JOB: "terraform-plan-prod",
+      },
+      runCommand: commandRunner(),
+      spawnShow: () => showProcess(['{"format_version":"1.2"}']),
+      now: () => new Date("2026-08-12T10:11:12Z"),
+      newSubmissionID: () => "018f47a1-91e4-7cc5-91fe-2f5f5d7a9d10",
+      submit: async (request) => {
+        submitted = request;
+        assert.equal(request.start.capture_status, "pending");
+        assert.equal(request.start.production, production);
+        assert.equal(
+          request.start.capture_started_at,
+          "2026-08-12T10:11:12.000Z",
+        );
+        const freshToken = await request.getOIDCToken();
+        assert.equal(freshToken, token);
+        const destination = new MemoryDestination();
+        const capture = await request.writeBody(
+          destination as unknown as ClientRequest,
+          "action-test-boundary",
+          new AbortController().signal,
+          request.start,
+        );
+        destination.end();
+        submittedBody = destination.body().toString("latin1");
+        return {
+          response: {
+            statusCode: 202,
+            headers: {},
+            body: Buffer.from(
+              receipt
+                .toString()
+                .replace('"evidence_kind":"plan"', '"evidence_kind":"state"'),
+            ),
+          },
+          capture,
+          attempts: 1,
+          idempotencyKey:
+            "sha256=e8493bb4610c15c987d761986e3f61edb464a9e06f5f78e2b9280bc06bbea17a",
+        };
+      },
+    });
+    assert.equal(execution.receipt.status, "accepted");
+    assert.match(submittedBody, new RegExp(`"production":${production}`));
+    assert.equal(submitted?.material.selector, "prod");
+    assert.match(submittedBody, /"instance":"prod"/u);
+    assert.doesNotMatch(submittedBody, /"terraform_workspace"/u);
+    assert.deepEqual(core.secrets, [token]);
+    assert.deepEqual(core.audiences, [
+      "https://api.chamber.security/terraform-evidence",
+    ]);
+  });
+}

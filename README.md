@@ -57,6 +57,7 @@ records only a safe failed-capture receipt; it cannot change currentness.
   uses: chamber-security/terraform-evidence-action@v1
   with:
     evidence: state
+    production: "true" # Use false only when entirely non-production.
     working-directory: terraform/${{ matrix.environment }}
     apply-outcome: ${{ steps.apply.outcome }}
 ```
@@ -114,16 +115,17 @@ Do not combine `pull_request_target` with checkout of untrusted pull-request cod
 
 ## Inputs and outputs
 
-| Input               | Required | Default     | Meaning                                                                      |
-| ------------------- | -------- | ----------- | ---------------------------------------------------------------------------- |
-| `evidence`          | yes      | —           | `plan` or `state`                                                            |
-| `working-directory` | no       | `.`         | Repository-relative Terraform root                                           |
-| `plan-file`         | plan     | —           | Saved binary plan path relative to the root                                  |
-| `instance`          | no       | inferred    | Stable multiple-state discriminator                                          |
-| `source-ref`        | no       | automatic   | Active Source ref for rare ambiguity                                         |
-| `apply-outcome`     | state    | —           | `success`, `failure`, or `cancelled`; `skipped` is rejected                  |
-| `failure-mode`      | no       | `warn`      | `warn` preserves Terraform's outcome; `error` fails this step too            |
-| `endpoint`          | no       | Chamber API | Advanced HTTPS tunnel/integration-test override; OIDC audience never changes |
+| Input               | Required | Default     | Meaning                                                                                                                               |
+| ------------------- | -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `evidence`          | yes      | —           | `plan` or `state`                                                                                                                     |
+| `working-directory` | no       | `.`         | Repository-relative Terraform root                                                                                                    |
+| `plan-file`         | plan     | —           | Saved binary plan path relative to the root                                                                                           |
+| `instance`          | no       | inferred    | Stable multiple-state discriminator                                                                                                   |
+| `source-ref`        | no       | automatic   | Active Source ref for rare ambiguity                                                                                                  |
+| `production`        | state    | —           | Required explicit `true` if any resources are production (including mixed states), or `false` if entirely non-production. No default. |
+| `apply-outcome`     | state    | —           | `success`, `failure`, or `cancelled`; `skipped` is rejected                                                                           |
+| `failure-mode`      | no       | `warn`      | `warn` preserves Terraform's outcome; `error` fails this step too                                                                     |
+| `endpoint`          | no       | Chamber API | Advanced HTTPS tunnel/integration-test override; OIDC audience never changes                                                          |
 
 Outputs are `status`, `invocation-id`, optional `revision-id`, optional
 `assessment-id`, and `analysis-status`. Chamber diagnostics become safe GitHub

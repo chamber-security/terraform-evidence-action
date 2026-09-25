@@ -22,6 +22,7 @@ void test("declares the Node 24 JavaScript runtime and exact public surface", as
     "instance",
     "source-ref",
     "apply-outcome",
+    "production",
     "failure-mode",
     "endpoint",
   ]) {
