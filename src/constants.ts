@@ -1,7 +1,7 @@
-export const ACTION_VERSION = "1.0.2";
+export const ACTION_VERSION = "1.0.3";
 export const OIDC_AUDIENCE = "https://api.chamber.security/terraform-evidence";
 export const DEFAULT_ENDPOINT =
-  "https://api.chamber.security/integrations/github-actions/terraform-evidence";
+  "https://api.chambersecurity.io/integrations/github-actions/terraform-evidence";
 
 export const LIMITS = Object.freeze({
   startBytes: 16 * 1024,

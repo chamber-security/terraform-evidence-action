@@ -26,7 +26,7 @@ void test("reads the exact plan input contract", () => {
       sourceRef: "main",
       failureMode: "error",
       endpoint: new URL(
-        "https://api.chamber.security/integrations/github-actions/terraform-evidence",
+        "https://api.chambersecurity.io/integrations/github-actions/terraform-evidence",
       ),
     },
   );

@@ -27,7 +27,7 @@ const start: StartV1 = {
   pull_request_base_sha: "fedcba9876543210fedcba9876543210fedcba98",
   github_job: "terraform-plan-prod",
   reported_plan_outcome: "success",
-  action_version: "1.0.2",
+  action_version: "1.0.3",
   capture_started_at: "2026-08-12T10:11:12.000Z",
   capture_status: "pending",
 };

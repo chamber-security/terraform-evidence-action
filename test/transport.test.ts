@@ -26,7 +26,7 @@ const start: StartV1 = {
   capture_started_at: "2026-08-13T08:00:00.000Z",
   capture_status: "pending",
   reported_plan_outcome: "success",
-  action_version: "1.0.2",
+  action_version: "1.0.3",
 };
 
 const startDigest =
