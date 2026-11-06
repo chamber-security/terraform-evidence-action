@@ -1,9 +1,14 @@
 name: Release check
 
+# Detection layer behind the tag rulesets: only the Promote release workflow's
+# GitHub App can create a release tag or move v1. This runs after a tag is
+# live and checks that it names a reviewed, green commit on main.
+
 on:
   push:
     tags:
       - "v*.*.*"
+      - "v1"
 
 permissions:
   contents: read
@@ -12,13 +17,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
-          cache: npm
       - run: npm ci
       - run: npm run format:check
       - run: npm run lint
@@ -28,5 +33,15 @@ jobs:
         run: |
           npm run build
           git diff --exit-code -- dist
-      - name: Require immutable semver tag at HEAD
-        run: test "$(git rev-list -n 1 "${GITHUB_REF_NAME}")" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain -- dist)"
+      - name: Require the tag to name this commit on main
+        run: |
+          set -euo pipefail
+          test "$(git rev-list -n 1 "${GITHUB_REF_NAME}")" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+      - name: Require the release version to match the tag
+        if: github.ref_name != 'v1'
+        run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+      - name: Require v1 to point at a v1.x.y release
+        if: github.ref_name == 'v1'
+        run: git tag --points-at "${GITHUB_SHA}" | grep -Eq '^v1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
