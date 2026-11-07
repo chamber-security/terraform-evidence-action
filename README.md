@@ -105,8 +105,9 @@ authoritative.
 ## Branch behavior
 
 Plans from pull request branches remain proposed evidence and do not create an
-off-source execution finding. Post-apply state is admissible from any branch or tag.
-Chamber compares verified execution provenance with all currently active Sources:
+off-source execution finding. Post-apply state is admissible from any branch or tag,
+but state from a run the Source doesn't [trust](#trusted-runs) can only add a
+production declaration, never withdraw one. Chamber compares verified execution provenance with all currently active Sources:
 registered alternate Sources are intended, while current off-source instances or
 attributable changes can warn. A no-op off-source apply records history without
 marking every resource changed. When active Source facts catch up, current warnings
