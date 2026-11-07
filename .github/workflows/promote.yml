@@ -111,7 +111,7 @@ jobs:
           test "$(node -p 'require("./package-lock.json").version')" = "$VERSION"
           grep -qxF "export const ACTION_VERSION = \"$VERSION\";" src/constants.ts
       # No dependency cache: a release check installs from the lockfile alone.
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Require dist/ to rebuild clean
