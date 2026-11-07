@@ -37,9 +37,10 @@ steps:
       plan-file: tfplan
 ```
 
-Plan evidence is candidate-only. It can make the matching exact-commit PR analysis
-more precise, including known cardinality, values, deletes, and replacements, but it
-never becomes canonical state and never proves an apply happened.
+Plan evidence is candidate-only. A plan from a [trusted run](#trusted-runs) can make
+the matching exact-commit PR analysis more precise, including known cardinality,
+values, deletes, and replacements; a plan from any other run can only make it
+stricter. A plan never becomes canonical state and never proves an apply happened.
 
 ## Post-apply state evidence
 
@@ -104,14 +105,55 @@ authoritative.
 ## Branch behavior
 
 Plans from pull request branches remain proposed evidence and do not create an
-off-source execution finding. Post-apply state is admissible from any branch or tag.
-Chamber compares verified execution provenance with all currently active Sources:
+off-source execution finding. Post-apply state is admissible from any branch or tag,
+but state from a run the Source doesn't [trust](#trusted-runs) can only add a
+production declaration, never withdraw one. Chamber compares verified execution provenance with all currently active Sources:
 registered alternate Sources are intended, while current off-source instances or
 attributable changes can warn. A no-op off-source apply records history without
 marking every resource changed. When active Source facts catch up, current warnings
 resolve and execution history remains.
 
 Do not combine `pull_request_target` with checkout of untrusted pull-request code.
+
+A plan counts for a pull request only when the run's OIDC token proves that pull
+request: a `pull_request` run for it, a `pull_request_target` run for its head and
+base when no other pull request shares them, or a `push` or `workflow_dispatch` run
+on its head branch at its head commit, in the same repository rather than a fork. Plans from other runs, such as
+comment-triggered or merge queue runs, never count for a pull request.
+
+## Trusted runs
+
+`terraform plan` runs code from the repository, so a pull request's author can shape
+any plan their own run submits. Chamber therefore trusts a run's evidence only when
+the Source names the run's GitHub environment, and optionally its reusable workflow,
+under **Trusted evidence** on the Source's **Evidence** tab. Evidence from any other
+run can only make a pull request's check stricter: a value only the plan knows stays
+unknown, a planned delete doesn't remove a declared grant, and state can't withdraw a
+production declaration.
+
+GitHub issues a job in an environment its OIDC token only after the environment's
+protection rules pass, and that is what Chamber trusts. Protect the environment with
+a person's approval of each run: add required reviewers, turn on **Prevent
+self-review** and turn off **Allow administrators to bypass configured protection
+rules**. Approving a run lets that pull request's workflow and Terraform send trusted
+evidence, so approve only runs of pull requests you've reviewed. **Prevent
+self-review** only stops whoever started a run approving it, so a pull request's
+author can still approve a re-run someone else started. Deployment branch limits
+don't protect a job that plans a pull request; use them only for a job that runs after
+merge, such as one that sends state. Then run the job in it:
+
+```yaml
+jobs:
+  plan:
+    environment: terraform-plan
+    permissions:
+      contents: read
+      id-token: write
+```
+
+A reusable workflow alone is never trusted, since the pull request decides what calls
+it and with which inputs. The environment must match exactly, apart from letter case,
+and only evidence Chamber receives after the Source's setting last changed is trusted.
 
 ## Inputs and outputs
 
