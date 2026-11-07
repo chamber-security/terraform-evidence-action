@@ -12,6 +12,8 @@ checks the commit; repository settings decide who may write tags:
 - The App's private key is a secret in the `release` environment, which only `main`
   can use. Its only permissions are Contents read and write (plus the Metadata read
   every App has) on this repository.
+- A branch ruleset with no bypass stops anyone creating a branch named `v1` or
+  `v1.x.y`, which a workflow's `uses: …@v1` could otherwise run instead of the tag.
 
 The App creates plain tags, not signed annotated ones: the rulesets and immutable
 releases replace tag signatures. `Release check` runs again after every `v1.x.y` tag
