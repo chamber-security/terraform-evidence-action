@@ -155,8 +155,11 @@ cryptographic proof of a local command.
 
 ## Pinning
 
-`@v1` follows compatible v1 releases. For strict supply-chain controls, pin the full
-immutable commit SHA and use release notes or Dependabot to update it deliberately:
+`@v1` follows compatible v1 releases. Only Chamber's release workflow can create a
+`v1.x.y` tag or move `v1`; it tags only a reviewed commit on `main` that passed CI,
+and `v1` is moved by a separate run once the release's acceptance has passed.
+Customers with strict supply-chain controls should still pin the full immutable commit
+SHA, and use release notes or Dependabot to update it deliberately:
 
 ```yaml
 uses: chamber-security/terraform-evidence-action@<full-commit-sha>
@@ -164,4 +167,5 @@ uses: chamber-security/terraform-evidence-action@<full-commit-sha>
 
 Release integrity and the committed bundle procedure are documented in
 [RELEASING.md](RELEASING.md); vulnerability reporting is in
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). To report a bug or ask for a feature, open an issue; see
+[CONTRIBUTING.md](CONTRIBUTING.md).

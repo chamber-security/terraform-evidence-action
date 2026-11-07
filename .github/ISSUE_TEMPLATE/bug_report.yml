@@ -1,0 +1,28 @@
+name: Bug report
+description: The Action doesn't behave as its README describes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Don't paste tokens, Terraform output, plan or state files, repository secrets or customer data. To report a security vulnerability, use [private vulnerability reporting](https://github.com/chamber-security/terraform-evidence-action/security/advisories/new) instead, as [SECURITY.md](https://github.com/chamber-security/terraform-evidence-action/blob/main/SECURITY.md) describes.
+  - type: input
+    id: version
+    attributes:
+      label: Action version
+      description: The ref in your workflow's `uses:` line, such as `v1` or a full commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, what happened instead, and the Action's status output and annotations.
+    validations:
+      required: true
+  - type: textarea
+    id: step
+    attributes:
+      label: Workflow step
+      description: The Action's step from your workflow, with secrets and internal names removed.
+      render: yaml

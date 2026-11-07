@@ -1,0 +1,167 @@
+name: Promote release
+
+# The only way to create a v1.x.y tag or move v1 (CHA-728). Tag rulesets let
+# only the release GitHub App create tags or move v1, and nobody, the App
+# included, may update or delete a v1.x.y tag. This workflow is what checks
+# the commit; the rulesets only decide who may write tags. The App's key is a
+# secret in the `release` environment, which only main can use. RELEASING.md
+# has the steps.
+#
+# create-release tags a commit on main that passed CI on a push to main, after
+# checking its version and that dist/ rebuilds clean, and publishes a release.
+# move-major points v1 at an existing release once its acceptance has passed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: create-release tags a commit as vVERSION; move-major points v1 at an existing release
+        required: true
+        type: choice
+        options:
+          - create-release
+          - move-major
+      version:
+        description: Release version, such as 1.0.3
+        required: true
+        type: string
+      commit:
+        description: Full commit SHA on main to release (create-release only)
+        required: false
+        type: string
+      dry_run:
+        description: Verify only, without creating or moving a tag
+        required: true
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify the release commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      commit: ${{ steps.admit.outputs.commit }}
+      tag: ${{ steps.admit.outputs.tag }}
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Promote release runs only from main, not ${GITHUB_REF}"
+          exit 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: admit
+        name: Admit the inputs
+        env:
+          OPERATION: ${{ inputs.operation }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$VERSION" =~ ^1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail "version must be 1.MINOR.PATCH"
+          tag="v$VERSION"
+          case "$OPERATION" in
+            create-release)
+              [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "commit must be a full lowercase commit SHA"
+              # A rerun after a partial release may find its own tag; any other tag is final.
+              if existing=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+                [ "$existing" = "$COMMIT" ] || fail "$tag already exists at $existing"
+              fi
+              ;;
+            move-major)
+              [ -z "$COMMIT" ] || fail "move-major takes its commit from $tag; leave commit empty"
+              COMMIT=$(git rev-parse -q --verify "refs/tags/$tag^{commit}") || fail "$tag does not exist"
+              ;;
+            *) fail "unknown operation $OPERATION" ;;
+          esac
+          git cat-file -e "$COMMIT^{commit}" 2>/dev/null || fail "$COMMIT is not a commit in this repository"
+          git merge-base --is-ancestor "$COMMIT" origin/main || fail "$COMMIT is not on main"
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&event=push&branch=main&status=success" --jq '.total_count')
+          [ "$passed" -ge 1 ] || fail "CI has not passed for $COMMIT on a push to main"
+          if [ "$OPERATION" = move-major ]; then
+            checked=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-check.yml/runs?head_sha=$COMMIT&event=push&status=success" --jq "[.workflow_runs[] | select(.head_branch == \"$tag\")] | length")
+            [ "$checked" -ge 1 ] || fail "Release check has not passed for $tag"
+          fi
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Check out the release commit
+        env:
+          COMMIT: ${{ steps.admit.outputs.commit }}
+        run: git checkout --quiet --detach "$COMMIT"
+      - name: Require the version to match
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(node -p 'require("./package.json").version')" = "$VERSION"
+          test "$(node -p 'require("./package-lock.json").version')" = "$VERSION"
+          grep -qxF "export const ACTION_VERSION = \"$VERSION\";" src/constants.ts
+      # No dependency cache: a release check installs from the lockfile alone.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - name: Require dist/ to rebuild clean
+        run: |
+          npm ci
+          npm run build
+          git diff --exit-code -- dist
+          test -z "$(git status --porcelain -- dist)"
+
+  promote:
+    name: Create the release or move v1
+    needs: verify
+    if: github.ref == 'refs/heads/main' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release
+    permissions: {}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Create the release tag and release
+        if: inputs.operation == 'create-release'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # Idempotent, so a rerun can finish a partial release: verify has
+          # already refused a tag that names any other commit.
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$COMMIT" --silent
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Chamber Terraform evidence Action $TAG" \
+            --notes "Release of commit $COMMIT. To pin it, use \`chamber-security/terraform-evidence-action@$COMMIT\`. \`v1\` moves here only after the release acceptance passes."
+      - name: Move v1
+        if: inputs.operation == 'move-major'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1" --silent 2>/dev/null; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/v1" -f sha="$COMMIT" -F force=true --silent
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/tags/v1 -f sha="$COMMIT" --silent
+          fi
