@@ -6,7 +6,7 @@ token, Terraform output, repository metadata, or a reproduction with customer da
 
 Supported releases are the current immutable `v1.x.y` release and the moving `v1`
 major tag. Security fixes are shipped in a new immutable release. Repository rulesets
-let only the promotion workflow's deploy key create release tags or move `v1`, and
+let only the promotion workflow's GitHub App create release tags or move `v1`, and
 nobody can move or delete a `v1.x.y` tag. The workflow tags only a commit on `main`
 that passed CI, and `v1` is moved by a separate run once the release's acceptance has
 passed. [RELEASING.md](RELEASING.md) describes the procedure. Customers with strict

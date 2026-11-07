@@ -1,7 +1,7 @@
 name: Release check
 
 # Detection layer behind the tag rulesets: only the Promote release workflow's
-# deploy key can create a release tag or move v1. This runs after a tag is
+# GitHub App can create a release tag or move v1. This runs after a tag is
 # live and checks that it names a reviewed, green commit on main.
 
 on:
