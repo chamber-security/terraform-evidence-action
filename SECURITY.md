@@ -1,8 +1,11 @@
 # Security policy
 
 Please report suspected vulnerabilities privately through GitHub's **Report a
-vulnerability** flow for this repository. Do not open a public issue containing a
-token, Terraform output, repository metadata, or a reproduction with customer data.
+vulnerability** flow for this repository, or by email as Chamber's
+[vulnerability disclosure policy](https://chambersecurity.io/docs/vulnerability-disclosure/)
+describes. That policy sets out what's in scope, what to expect and the good-faith
+safe harbor. Do not open a public issue containing a token, Terraform output,
+repository metadata, or a reproduction with customer data.
 
 Supported releases are the current immutable `v1.x.y` release and the moving `v1`
 major tag. Security fixes are shipped in a new immutable release. Repository rulesets
