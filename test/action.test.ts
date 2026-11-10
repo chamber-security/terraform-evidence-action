@@ -119,7 +119,7 @@ void test("builds exact explicit StartV1 and requests exact OIDC audience", asyn
   assert.doesNotMatch(submittedBody, /"terraform_workspace"/u);
   assert.deepEqual(core.secrets, [token]);
   assert.deepEqual(core.audiences, [
-    "https://api.chamber.security/terraform-evidence",
+    "https://api.chambersecurity.io/terraform-evidence",
   ]);
 });
 
@@ -240,7 +240,7 @@ for (const production of [true, false]) {
     assert.doesNotMatch(submittedBody, /"terraform_workspace"/u);
     assert.deepEqual(core.secrets, [token]);
     assert.deepEqual(core.audiences, [
-      "https://api.chamber.security/terraform-evidence",
+      "https://api.chambersecurity.io/terraform-evidence",
     ]);
   });
 }

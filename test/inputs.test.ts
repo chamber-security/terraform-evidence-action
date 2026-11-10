@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { DEFAULT_ENDPOINT } from "../src/constants";
 import { SafeError } from "../src/errors";
 import { readInputs } from "../src/inputs";
 
@@ -26,10 +28,25 @@ void test("reads the exact plan input contract", () => {
       sourceRef: "main",
       failureMode: "error",
       endpoint: new URL(
-        "https://api.chamber.security/integrations/github-actions/terraform-evidence",
+        "https://api.chambersecurity.io/integrations/github-actions/terraform-evidence",
       ),
     },
   );
+});
+
+void test("defaults to Chamber's production API on a domain Chamber owns", async () => {
+  const production =
+    "https://api.chambersecurity.io/integrations/github-actions/terraform-evidence";
+  assert.equal(
+    read({ evidence: "plan", "plan-file": "saved.tfplan" }).endpoint.href,
+    production,
+  );
+  assert.equal(DEFAULT_ENDPOINT, production);
+  const metadata = await readFile("action.yml", "utf8");
+  const declared = /^ {2}endpoint:\n(?: {4}.*\n)*? {4}default: (\S+)$/mu.exec(
+    metadata,
+  );
+  assert.equal(declared?.[1], DEFAULT_ENDPOINT);
 });
 
 void test("requires state outcome and rejects skipped", () => {

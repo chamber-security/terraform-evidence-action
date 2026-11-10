@@ -32,7 +32,7 @@ inputs:
   endpoint:
     description: Advanced HTTPS endpoint override for tunnel and integration testing.
     required: false
-    default: https://api.chamber.security/integrations/github-actions/terraform-evidence
+    default: https://api.chambersecurity.io/integrations/github-actions/terraform-evidence
 
 outputs:
   status:
