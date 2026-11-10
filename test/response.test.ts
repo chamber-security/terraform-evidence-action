@@ -71,6 +71,80 @@ void test("maps typed rejection to a safe fixed message", () => {
   );
 });
 
+function rejection(statusCode: number, code: string): ServerRejectionError {
+  try {
+    parseReceipt({
+      statusCode,
+      headers: {},
+      body: Buffer.from(
+        JSON.stringify({
+          error: {
+            code,
+            message: "raw unsafe server message SECRET_CANARY",
+            details: { status: "rejected" },
+          },
+        }),
+      ),
+    });
+  } catch (error: unknown) {
+    if (error instanceof ServerRejectionError) return error;
+    throw error;
+  }
+  throw new Error("expected a rejection");
+}
+
+void test("words a rejection by Chamber's code before its HTTP status", () => {
+  const cases: [number, string, string][] = [
+    [
+      409,
+      "terraform_evidence_invalid",
+      "Chamber could not match this evidence to a single active Source, Terraform target and verified run of this repository.",
+    ],
+    [
+      409,
+      "terraform_evidence_idempotency_conflict",
+      "This evidence conflicts with an earlier submission, or Chamber's Sources or state bindings changed while it was finalized; rerun the job to send a fresh capture.",
+    ],
+    [
+      400,
+      "terraform_evidence_root_unknown",
+      "No active Chamber Terraform Source matches this repository directory, or the source-ref given.",
+    ],
+    [
+      409,
+      "terraform_evidence_source_ambiguous",
+      "Chamber could not settle which active Source owns this evidence; check this directory's Sources in Chamber, pass source-ref if several share it, and rerun the job.",
+    ],
+    [
+      409,
+      "github_actions_oidc_replayed",
+      "Chamber had already used this step's GitHub OIDC token; rerun the job.",
+    ],
+    [
+      422,
+      "terraform_evidence_invalid",
+      "Chamber safely rejected the Terraform evidence document.",
+    ],
+  ];
+  for (const [statusCode, code, message] of cases) {
+    const error = rejection(statusCode, code);
+    assert.equal(error.code, code);
+    assert.equal(error.message, message, `${statusCode} ${code}`);
+    assert.equal(error.message.includes("SECRET_CANARY"), false);
+  }
+});
+
+void test("never words an unrecognised conflict as an idempotency conflict", () => {
+  // constructor matches the code pattern and is a key every object inherits.
+  for (const code of ["a_future_conflict", "http_409", "constructor"]) {
+    const error = rejection(409, code);
+    assert.equal(
+      error.message,
+      "Chamber refused the Terraform evidence because it conflicts with an earlier submission or with Chamber's current Sources.",
+    );
+  }
+});
+
 void test("rejects an oversized or malformed response without echoing it", () => {
   assert.throws(
     () =>

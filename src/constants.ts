@@ -1,4 +1,4 @@
-export const ACTION_VERSION = "1.0.3";
+export const ACTION_VERSION = "1.0.4";
 export const OIDC_AUDIENCE =
   "https://api.chambersecurity.io/terraform-evidence";
 export const DEFAULT_ENDPOINT =
