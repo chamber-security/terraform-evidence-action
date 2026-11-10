@@ -72,7 +72,51 @@ function parseJSON(body: Buffer): unknown {
   }
 }
 
-function rejectionMessage(statusCode: number): string {
+// Fixed messages for Chamber's error codes. The Action never prints the
+// server's own text, so a code it doesn't know falls back to its HTTP status.
+const CODE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  github_actions_oidc_invalid: "Chamber rejected GitHub OIDC authentication.",
+  github_actions_oidc_key_unavailable:
+    "Chamber could not fetch GitHub's OIDC signing keys; rerun the job.",
+  github_actions_oidc_replayed:
+    "Chamber had already used this step's GitHub OIDC token; rerun the job.",
+  github_actions_repository_not_admitted:
+    "This repository is not admitted by its active Chamber GitHub App installation.",
+  github_actions_installation_unverifiable:
+    "Chamber could not verify this repository or run through its GitHub App installation.",
+  terraform_evidence_invalid_request:
+    "Chamber rejected the submission metadata.",
+  terraform_evidence_transport_invalid:
+    "Chamber rejected the submission's metadata or encoding.",
+  terraform_evidence_preflight_invalid:
+    "Chamber's preflight grant for this submission was invalid or expired; rerun the job.",
+  terraform_evidence_idempotency_conflict:
+    "This evidence conflicts with an earlier submission, or Chamber's Sources or state bindings changed while it was finalized; rerun the job to send a fresh capture.",
+  terraform_evidence_body_too_large:
+    "The Terraform evidence submission exceeded Chamber's size limit.",
+  terraform_evidence_root_unknown:
+    "No active Chamber Terraform Source matches this repository directory, or the source-ref given.",
+  terraform_evidence_source_ambiguous:
+    "Chamber could not settle which active Source owns this evidence; check this directory's Sources in Chamber, pass source-ref if several share it, and rerun the job.",
+  terraform_evidence_instance_ambiguous:
+    "Chamber could not tell which Terraform state this evidence belongs to; pass a stable instance to each evidence step, or rerun the job if one already is.",
+  terraform_evidence_binding_inactive:
+    "The matching Terraform state binding is not active in Chamber; activate or discard it there first.",
+  terraform_evidence_trusted_lineage_required:
+    "This Terraform state binding needs verified lineage metadata that matches it.",
+});
+
+function rejectionMessage(statusCode: number, code: string): string {
+  // terraform_evidence_invalid is a 422 for a document Chamber rejects, and a
+  // 409 when the evidence matches no single active Source, Terraform target or
+  // verified run.
+  if (code === "terraform_evidence_invalid" && statusCode === 409) {
+    return "Chamber could not match this evidence to a single active Source, Terraform target and verified run of this repository.";
+  }
+  const byCode = Object.hasOwn(CODE_MESSAGES, code)
+    ? CODE_MESSAGES[code]
+    : undefined;
+  if (byCode !== undefined) return byCode;
   switch (statusCode) {
     case 400:
       return "Chamber rejected the submission metadata.";
@@ -81,7 +125,7 @@ function rejectionMessage(statusCode: number): string {
     case 403:
       return "This repository is not admitted by its active Chamber GitHub App installation.";
     case 409:
-      return "The Terraform evidence idempotency key conflicts with a different submission.";
+      return "Chamber refused the Terraform evidence because it conflicts with an earlier submission or with Chamber's current Sources.";
     case 413:
       return "The Terraform evidence submission exceeded Chamber's size limit.";
     case 422:
@@ -128,7 +172,7 @@ export function parseReceipt(response: HTTPResponse): ReceiptEnvelope {
         : "rejected";
     throw new ServerRejectionError(
       code,
-      rejectionMessage(response.statusCode),
+      rejectionMessage(response.statusCode, code),
       status,
       optionalUUID(details?.invocation_id),
       parseDiagnostics(details?.diagnostics),
