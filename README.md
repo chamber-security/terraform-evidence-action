@@ -191,7 +191,10 @@ Terraform stdout is streamed through gzip into the ordered
 `start`/`evidence`/`completion` multipart protocol. Raw JSON, OIDC tokens, plan files,
 variables, outputs, Terraform values, and stderr are never logged or stored by this
 Action. Chamber synchronously validates and reduces the document and does not retain
-the raw payload. The transport proves GitHub issued a token to the admitted
+the raw payload. Every command the Action starts gets the null device in place of the
+step's output, environment, path, state and summary files. A Terraform wrapper that
+records output through them, such as the one `hashicorp/setup-terraform` installs by
+default, so writes nowhere, and Terraform's output never becomes a step output. The transport proves GitHub issued a token to the admitted
 repository; checkout/outcome/evidence association remains client-attested rather than
 cryptographic proof of a local command.
 
