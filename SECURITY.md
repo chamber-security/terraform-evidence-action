@@ -30,7 +30,11 @@ reported as ambiguous and requires a new Action execution.
 Action does not buffer it as a whole, redirect it to disk, or print it. It never runs
 `terraform state pull`, reads Terraform backend files, installs Terraform, or accepts
 cloud/backend credentials. Stderr is counted only up to a bound and never retained or
-printed.
+printed. Terraform runs with the null device in place of the step's output,
+environment, path, state and summary files, so a wrapper that records output
+through them, such as `hashicorp/setup-terraform`'s, writes nowhere.
+Releases before 1.0.5 didn't do this: with that wrapper on, the evidence step's
+`stdout` output held the plan or state JSON.
 
 Chamber treats the transport as GitHub-authenticated but the checkout, outcome, and
 evidence association as client-attested. See the README for the documented Terraform

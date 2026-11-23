@@ -1,8 +1,46 @@
 import { spawn } from "node:child_process";
+import { devNull } from "node:os";
 import type { Readable } from "node:stream";
 
 import { LIMITS } from "./constants";
 import { SafeError } from "./errors";
+
+// A step records its outputs, environment, path, state and job summary by
+// appending to the files these variables name. A Terraform wrapper, such as the
+// one hashicorp/setup-terraform installs by default, saves what Terraform prints
+// as step outputs through them, and for state that is every secret in plaintext.
+// Commands the Action starts get the null device instead, so a wrapper that uses
+// these variables writes nowhere. Setting them, rather than removing them, keeps
+// such a wrapper from falling back to workflow commands on the stdout the Action
+// streams. On Windows, @actions/core may not accept the null device as a file;
+// a wrapper built on it then fails, and so does the capture, without leaking.
+const GITHUB_FILE_COMMANDS = [
+  "GITHUB_ENV",
+  "GITHUB_OUTPUT",
+  "GITHUB_PATH",
+  "GITHUB_STATE",
+  "GITHUB_STEP_SUMMARY",
+] as const;
+
+// The runner gives JavaScript actions, but not run steps, these credentials for
+// the cache, artifact and results services. Terraform and the providers it
+// starts don't need them.
+const ACTIONS_RUNTIME_VARIABLES = [
+  "ACTIONS_CACHE_URL",
+  "ACTIONS_RESULTS_URL",
+  "ACTIONS_RUNTIME_TOKEN",
+  "ACTIONS_RUNTIME_URL",
+] as const;
+
+export function commandEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const child: NodeJS.ProcessEnv = { ...env };
+  for (const name of GITHUB_FILE_COMMANDS) child[name] = devNull;
+  for (const name of ACTIONS_RUNTIME_VARIABLES)
+    Reflect.deleteProperty(child, name);
+  return child;
+}
 
 export interface CommandResult {
   exitCode: number;
@@ -33,6 +71,7 @@ export async function runBoundedCommand(
   const stderrLimit = options.stderrLimit ?? LIMITS.stderrBytes;
   const child = spawn(executable, [...args], {
     cwd: options.cwd,
+    env: commandEnvironment(),
     shell: false,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -140,6 +179,7 @@ export function spawnTerraformShow(
 ): ShowProcess {
   const child = spawn("terraform", [...args], {
     cwd,
+    env: commandEnvironment(),
     shell: false,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
