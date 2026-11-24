@@ -4,7 +4,12 @@ import type { CommandRunner, ShowProcess, ShowSpawner } from "./command";
 import { LIMITS } from "./constants";
 import { SafeError } from "./errors";
 import { MultipartWriter, writeWithBackpressure } from "./multipart";
-import type { CompletionV1, EvidenceKind, StartV1 } from "./types";
+import type {
+  CompletionV1,
+  EvidenceKind,
+  StartV1,
+  TerraformTool,
+} from "./types";
 
 const INSTANCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
@@ -50,10 +55,11 @@ export async function discoverWorkspace(
   workingDirectoryAbsolute: string,
   evidenceKind: EvidenceKind,
   explicitInstance: string | undefined,
+  tool: TerraformTool = "terraform",
 ): Promise<WorkspaceSelection> {
   let result;
   try {
-    result = await runCommand("terraform", ["workspace", "show"], {
+    result = await runCommand(tool, ["workspace", "show"], {
       cwd: workingDirectoryAbsolute,
     });
   } catch (error) {
@@ -69,8 +75,9 @@ export async function discoverWorkspace(
       return {
         selector: "",
         captureAllowed: evidenceKind === "plan",
+        // Chamber's diagnostic codes name Terraform for either tool.
         diagnosticCode:
-          error.code === "terraform_unavailable"
+          error.code === `${tool}_unavailable`
             ? "terraform_unavailable"
             : "target_unknown",
       };

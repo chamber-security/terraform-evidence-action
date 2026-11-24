@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   commandEnvironment,
   runBoundedCommand,
-  spawnTerraformShow,
+  spawnToolShow,
 } from "../src/command";
 import { SafeError } from "../src/errors";
 
@@ -101,7 +101,7 @@ void test(
         process.env[name] = file;
       }
 
-      const show = spawnTerraformShow(["show", "-json"], dir);
+      const show = spawnToolShow("terraform", ["show", "-json"], dir);
       const chunks: Buffer[] = [];
       show.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
       show.stderr.resume();
@@ -169,4 +169,21 @@ void test("does not retain or return stderr contents", async () => {
   );
   assert.equal("stderr" in result, false);
   assert.equal(JSON.stringify(result).includes(canary), false);
+});
+
+void test("names the tool it couldn't start", async () => {
+  const saved = process.env.PATH;
+  process.env.PATH = "";
+  try {
+    const show = spawnToolShow("tofu", ["show", "-json"], process.cwd());
+    await assert.rejects(
+      show.completion,
+      (error: unknown) =>
+        error instanceof SafeError &&
+        error.code === "terraform_unavailable" &&
+        error.message.startsWith("OpenTofu is required in PATH"),
+    );
+  } finally {
+    process.env.PATH = saved;
+  }
 });

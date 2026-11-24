@@ -1,19 +1,20 @@
 # Chamber Terraform evidence Action
 
-This public JavaScript Action streams documented `terraform show -json` plan or
-post-apply state evidence from your GitHub runner to Chamber. GitHub Actions OIDC
+This public JavaScript Action streams documented `terraform show -json` or
+`tofu show -json` plan or post-apply state evidence from your GitHub runner to
+Chamber. It works the same for Terraform and OpenTofu. GitHub Actions OIDC
 authenticates the installed repository, so there is no Chamber secret, organization
 ID, Source ID, binding ID, backend credential, or second Chamber-console setup step.
 
-The Action requires Terraform and a checked-out Git repository. It runs natively on
-GitHub-hosted or self-hosted runners using GitHub's Node 24 Action runtime; there is no
-Node setup step. It does not install Terraform.
+The Action requires Terraform or OpenTofu and a checked-out Git repository. It runs
+natively on GitHub-hosted or self-hosted runners using GitHub's Node 24 Action runtime;
+there is no Node setup step. It does not install Terraform or OpenTofu.
 
 ## Plan evidence
 
 Save the binary plan and invoke Chamber immediately afterwards. The Action never
-uploads the binary file; it runs `terraform show -json <plan-file>` and streams its
-stdout.
+uploads the binary file; it runs `terraform show -json <plan-file>` (or
+`tofu show -json <plan-file>`) and streams its stdout.
 
 ```yaml
 permissions:
@@ -46,7 +47,8 @@ stricter. A plan never becomes canonical state and never proves an apply happene
 
 Invoke the same Action after apply with `always()` so a failed or partial apply can
 still report the complete state observable at capture time. A failed `terraform show`
-records only a safe failed-capture receipt; it cannot change currentness.
+or `tofu show` records only a safe failed-capture receipt; it cannot change
+currentness.
 
 ```yaml
 - id: apply
@@ -66,6 +68,36 @@ records only a safe failed-capture receipt; it cannot change currentness.
 State is applied-presence and provider-identity evidence for one binding. Active
 Source HCL remains intended configuration and cloud observation remains observed
 reality. Chamber records the reported apply outcome honestly.
+
+## OpenTofu
+
+Install OpenTofu instead of Terraform and run `tofu`. The Action uses whichever of
+`terraform` and `tofu` is installed and tells Chamber which one ran. If a job installs
+both, set `tool` to the one that runs the root; the Action asks for it rather than
+guess.
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: opentofu/setup-opentofu@v2
+
+  - id: plan
+    working-directory: tofu/${{ matrix.environment }}
+    run: tofu plan -out=tfplan
+
+  - name: Send OpenTofu plan evidence to Chamber
+    if: ${{ always() && steps.plan.outcome == 'success' }}
+    uses: chamber-security/terraform-evidence-action@v1
+    with:
+      evidence: plan
+      working-directory: tofu/${{ matrix.environment }}
+      plan-file: tfplan
+      tool: tofu # Optional when only OpenTofu is installed.
+```
+
+State evidence works the same way after `tofu apply`. OpenTofu's state and plan
+encryption needs nothing from the Action: `tofu show -json` decrypts with the key
+configuration the job already has, and the Action never reads state files.
 
 ## Directories, workspaces, and `instance`
 
@@ -166,7 +198,8 @@ and only evidence Chamber receives after the Source's setting last changed is tr
 | `source-ref`        | no       | automatic      | Active Source ref for rare ambiguity                                                                                                                               |
 | `production`        | state    | —              | Required explicit `true` if any resources are production (including mixed states), or `false` if entirely non-production. No default.                              |
 | `apply-outcome`     | state    | —              | `success`, `failure`, or `cancelled`; `skipped` is rejected                                                                                                        |
-| `failure-mode`      | no       | `warn`         | `warn` preserves Terraform's outcome; `error` fails this step too                                                                                                  |
+| `tool`              | no       | detected       | `terraform` or `tofu`: the tool that runs the root. Required only when a job installs both                                                                         |
+| `failure-mode`      | no       | `warn`         | `warn` preserves the plan or apply step's outcome; `error` fails this step too                                                                                     |
 | `endpoint`          | no       | production API | `https://api.chambersecurity.io/integrations/github-actions/terraform-evidence`. Override only for tunnel and integration testing; the OIDC audience never changes |
 
 Outputs are `status`, `invocation-id`, optional `revision-id`, optional
@@ -175,7 +208,7 @@ notice/warning/error annotations. They never contain Terraform values or raw std
 
 ## Minimisation and transport
 
-Before starting Terraform, the Action sends the bounded `start` metadata to a
+Before starting Terraform or OpenTofu, the Action sends the bounded `start` metadata to a
 Chamber preflight with a fresh GitHub OIDC token for the exact fixed audience.
 Chamber validates the immutable repository, live installation, workflow context and
 metadata, then returns a short-lived request-bound grant. The Action marks that grant
@@ -192,9 +225,10 @@ Terraform stdout is streamed through gzip into the ordered
 variables, outputs, Terraform values, and stderr are never logged or stored by this
 Action. Chamber synchronously validates and reduces the document and does not retain
 the raw payload. Every command the Action starts gets the null device in place of the
-step's output, environment, path, state and summary files. A Terraform wrapper that
-records output through them, such as the one `hashicorp/setup-terraform` installs by
-default, so writes nowhere, and Terraform's output never becomes a step output. The transport proves GitHub issued a token to the admitted
+step's output, environment, path, state and summary files. A wrapper that records
+output through them, such as the ones `hashicorp/setup-terraform` and
+`opentofu/setup-opentofu` install by default, so writes nowhere, and the tool's output
+never becomes a step output. The transport proves GitHub issued a token to the admitted
 repository; checkout/outcome/evidence association remains client-attested rather than
 cryptographic proof of a local command.
 

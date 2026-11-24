@@ -2,6 +2,7 @@ export type EvidenceKind = "plan" | "state";
 export type FailureMode = "warn" | "error";
 export type ApplyOutcome = "success" | "failure" | "cancelled";
 export type CaptureStatus = "pending" | "succeeded" | "failed";
+export type TerraformTool = "terraform" | "tofu";
 
 export interface ActionInputs {
   evidence: EvidenceKind;
@@ -11,6 +12,7 @@ export interface ActionInputs {
   sourceRef?: string;
   applyOutcome?: ApplyOutcome;
   production?: boolean;
+  tool?: TerraformTool;
   failureMode: FailureMode;
   endpoint: URL;
 }
@@ -34,6 +36,7 @@ export interface StartV1 {
   reported_plan_outcome?: "success";
   reported_apply_outcome?: ApplyOutcome;
   production?: boolean;
+  tool?: TerraformTool;
   action_version: string;
 }
 
