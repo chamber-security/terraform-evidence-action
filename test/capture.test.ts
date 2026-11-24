@@ -10,6 +10,7 @@ import {
   type WorkspaceSelection,
 } from "../src/capture";
 import type { CommandRunner, ShowProcess } from "../src/command";
+import { SafeError } from "../src/errors";
 import type { StartV1 } from "../src/types";
 import { MemoryDestination, showProcess } from "./helpers";
 
@@ -497,4 +498,19 @@ void test("unknown plan target still captures with a safe diagnostic", async () 
     undefined,
   );
   assert.equal(result.diagnosticCode, "target_unknown");
+});
+
+void test("reports an OpenTofu that can't start in Chamber's code", async () => {
+  const runner: CommandRunner = async (executable) => {
+    assert.equal(executable, "tofu");
+    throw new SafeError("tofu_unavailable", "unavailable");
+  };
+  assert.deepEqual(
+    await discoverWorkspace(runner, "/cwd", "plan", undefined, "tofu"),
+    {
+      selector: "",
+      captureAllowed: true,
+      diagnosticCode: "terraform_unavailable",
+    },
+  );
 });

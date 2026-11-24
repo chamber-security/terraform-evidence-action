@@ -5,7 +5,7 @@ import test from "node:test";
 import { ACTION_VERSION, OIDC_AUDIENCE } from "../src/constants";
 
 void test("freezes the version and exact OIDC audience", () => {
-  assert.equal(ACTION_VERSION, "1.0.5");
+  assert.equal(ACTION_VERSION, "1.1.0");
   assert.equal(
     OIDC_AUDIENCE,
     "https://api.chambersecurity.io/terraform-evidence",
@@ -23,6 +23,7 @@ void test("declares the Node 24 JavaScript runtime and exact public surface", as
     "source-ref",
     "apply-outcome",
     "production",
+    "tool",
     "failure-mode",
     "endpoint",
   ]) {

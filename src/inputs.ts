@@ -1,6 +1,11 @@
 import { DEFAULT_ENDPOINT } from "./constants";
 import { SafeError } from "./errors";
-import type { ActionInputs, ApplyOutcome, FailureMode } from "./types";
+import type {
+  ActionInputs,
+  ApplyOutcome,
+  FailureMode,
+  TerraformTool,
+} from "./types";
 
 export type InputReader = (name: string) => string;
 
@@ -137,6 +142,17 @@ export function readInputs(getInput: InputReader): ActionInputs {
     );
   }
 
+  const toolInput = getInput("tool").trim();
+  let tool: TerraformTool | undefined;
+  if (toolInput === "terraform" || toolInput === "tofu") {
+    tool = toolInput;
+  } else if (toolInput !== "") {
+    throw new SafeError(
+      "invalid_tool",
+      "The tool input must be terraform or tofu.",
+    );
+  }
+
   const workingDirectory = getInput("working-directory").trim() || ".";
   const endpoint = parseEndpoint(getInput("endpoint").trim());
 
@@ -150,6 +166,7 @@ export function readInputs(getInput: InputReader): ActionInputs {
     ...(instance === undefined ? {} : { instance }),
     ...(sourceRef === undefined ? {} : { sourceRef }),
     ...(applyOutcome === undefined ? {} : { applyOutcome }),
+    ...(tool === undefined ? {} : { tool }),
   };
 }
 

@@ -1,5 +1,5 @@
 name: Chamber Terraform evidence
-description: Streams Terraform plan or post-apply state evidence to Chamber using GitHub Actions OIDC.
+description: Streams Terraform or OpenTofu plan or post-apply state evidence to Chamber using GitHub Actions OIDC.
 author: Chamber Security
 
 inputs:
@@ -7,7 +7,7 @@ inputs:
     description: Terraform evidence kind (plan or state).
     required: true
   working-directory:
-    description: Repository-relative Terraform root.
+    description: Repository-relative Terraform or OpenTofu root.
     required: false
     default: .
   plan-file:
@@ -25,8 +25,11 @@ inputs:
   apply-outcome:
     description: Outcome of the preceding apply step (success, failure, or cancelled).
     required: false
+  tool:
+    description: The tool that runs this root (terraform or tofu). Leave empty to use whichever is installed; set it when both are.
+    required: false
   failure-mode:
-    description: Warn without changing the Terraform outcome, or fail this Action step.
+    description: Warn without changing the Terraform or OpenTofu outcome, or fail this Action step.
     required: false
     default: warn
   endpoint:

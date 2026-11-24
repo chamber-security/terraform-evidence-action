@@ -106,3 +106,22 @@ void test("state requires an explicit production boolean, with no default", () =
       error instanceof SafeError && error.code === "production_not_allowed",
   );
 });
+
+void test("reads the tool input", () => {
+  for (const tool of ["terraform", "tofu"] as const) {
+    assert.equal(
+      read({ evidence: "plan", "plan-file": "saved.tfplan", tool }).tool,
+      tool,
+    );
+  }
+  assert.equal(
+    "tool" in read({ evidence: "plan", "plan-file": "saved.tfplan" }),
+    false,
+  );
+  assert.throws(
+    () =>
+      read({ evidence: "plan", "plan-file": "saved.tfplan", tool: "opentofu" }),
+    (error: unknown) =>
+      error instanceof SafeError && error.code === "invalid_tool",
+  );
+});

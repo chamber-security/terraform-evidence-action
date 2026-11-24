@@ -4,11 +4,14 @@ import type { Readable } from "node:stream";
 
 import { LIMITS } from "./constants";
 import { SafeError } from "./errors";
+import { TOOL_NAMES } from "./tool";
+import type { TerraformTool } from "./types";
 
 // A step records its outputs, environment, path, state and job summary by
-// appending to the files these variables name. A Terraform wrapper, such as the
-// one hashicorp/setup-terraform installs by default, saves what Terraform prints
-// as step outputs through them, and for state that is every secret in plaintext.
+// appending to the files these variables name. A Terraform or OpenTofu wrapper,
+// such as the ones hashicorp/setup-terraform and opentofu/setup-opentofu install
+// by default, saves what the tool prints as step outputs through them, and for
+// state that is every secret in plaintext.
 // Commands the Action starts get the null device instead, so a wrapper that uses
 // these variables writes nowhere. Setting them, rather than removing them, keeps
 // such a wrapper from falling back to workflow commands on the stdout the Action
@@ -23,8 +26,8 @@ const GITHUB_FILE_COMMANDS = [
 ] as const;
 
 // The runner gives JavaScript actions, but not run steps, these credentials for
-// the cache, artifact and results services. Terraform and the providers it
-// starts don't need them.
+// the cache, artifact and results services. Terraform, OpenTofu and the
+// providers they start don't need them.
 const ACTIONS_RUNTIME_VARIABLES = [
   "ACTIONS_CACHE_URL",
   "ACTIONS_RESULTS_URL",
@@ -173,11 +176,12 @@ export interface ShowProcess {
 
 export type ShowSpawner = (args: readonly string[], cwd: string) => ShowProcess;
 
-export function spawnTerraformShow(
+export function spawnToolShow(
+  tool: TerraformTool,
   args: readonly string[],
   cwd: string,
 ): ShowProcess {
-  const child = spawn("terraform", [...args], {
+  const child = spawn(tool, [...args], {
     cwd,
     env: commandEnvironment(),
     shell: false,
@@ -186,10 +190,11 @@ export function spawnTerraformShow(
   });
   const completion = new Promise<ShowCompletion>((resolve, reject) => {
     child.once("error", () => {
+      // Chamber's diagnostic codes name Terraform for either tool.
       reject(
         new SafeError(
           "terraform_unavailable",
-          "Terraform is required in PATH but could not be started.",
+          `${TOOL_NAMES[tool]} is required in PATH but could not be started.`,
         ),
       );
     });

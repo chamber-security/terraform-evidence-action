@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { discoverWorkspace, type CaptureResult, writeCapture } from "./capture";
 import {
   runBoundedCommand,
-  spawnTerraformShow,
+  spawnToolShow,
   type CommandRunner,
   type ShowSpawner,
 } from "./command";
@@ -13,12 +13,19 @@ import { boundedGitHubJob, readPullRequestContext, requireSHA } from "./github";
 import { readInputs, requestedFailureMode } from "./inputs";
 import { resolvePaths } from "./paths";
 import { parseReceipt, ServerRejectionError } from "./response";
+import { resolveTool, TOOL_NAMES } from "./tool";
 import {
   submitWithFreshOIDC,
   type SubmitRequest,
   type Submission,
 } from "./transport";
-import type { Diagnostic, FailureMode, Receipt, StartV1 } from "./types";
+import type {
+  Diagnostic,
+  FailureMode,
+  Receipt,
+  StartV1,
+  TerraformTool,
+} from "./types";
 
 export interface ActionCore {
   getInput(name: string): string;
@@ -49,43 +56,52 @@ export interface ActionExecution {
   receipt: Receipt;
   capture?: CaptureResult;
   attempts: number;
+  tool: TerraformTool;
 }
 
-const DIAGNOSTIC_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
-  target_unknown:
-    "Terraform workspace discovery failed, so Chamber retained the plan without selecting a target.",
-  workspace_discovery_failed:
-    "Terraform workspace discovery failed; the explicit instance was used.",
-  terraform_unavailable: "Terraform is required in PATH for evidence capture.",
-  terraform_show_failed:
-    "Terraform show failed; Chamber retained only a safe failed-capture receipt.",
-  terraform_show_timeout:
-    "Terraform show exceeded the capture deadline and was stopped.",
-  terraform_show_empty:
-    "Terraform show returned no evidence; Chamber retained only a safe failed-capture receipt.",
-  evidence_size_limit_exceeded:
-    "Terraform show exceeded the uncompressed evidence limit and was stopped.",
-  compressed_evidence_size_limit_exceeded:
-    "Compressed Terraform evidence exceeded the transport limit and was stopped.",
-  terraform_evidence_root_unknown:
-    "No active Chamber Terraform Source matches this repository directory.",
-  terraform_evidence_source_ambiguous:
-    "More than one active Source could own this evidence; pass source-ref or register the intended Source.",
-  terraform_evidence_instance_ambiguous:
-    "This Terraform root appears to use more than one state; pass a stable instance to each evidence step.",
-  evidence_rejected:
-    "Chamber rejected the Terraform document after safe validation; no revision or binding was created.",
-});
+// The capture codes name Terraform for either tool, so their messages name the
+// tool the Action ran. Terraform stays the language's name in Chamber's own
+// codes.
+function diagnosticMessages(
+  tool: TerraformTool,
+): Readonly<Record<string, string>> {
+  const name = TOOL_NAMES[tool];
+  return {
+    target_unknown: `${name} workspace discovery failed, so Chamber retained the plan without selecting a target.`,
+    workspace_discovery_failed: `${name} workspace discovery failed; the explicit instance was used.`,
+    terraform_unavailable: `${name} is required in PATH for evidence capture.`,
+    terraform_show_failed: `${name} show failed; Chamber retained only a safe failed-capture receipt.`,
+    terraform_show_timeout: `${name} show exceeded the capture deadline and was stopped.`,
+    terraform_show_empty: `${name} show returned no evidence; Chamber retained only a safe failed-capture receipt.`,
+    evidence_size_limit_exceeded: `${name} show exceeded the uncompressed evidence limit and was stopped.`,
+    compressed_evidence_size_limit_exceeded: `Compressed ${name} evidence exceeded the transport limit and was stopped.`,
+    terraform_evidence_root_unknown:
+      "No active Chamber Terraform Source matches this repository directory.",
+    terraform_evidence_source_ambiguous:
+      "More than one active Source could own this evidence; pass source-ref or register the intended Source.",
+    terraform_evidence_instance_ambiguous:
+      "This Terraform root appears to use more than one state; pass a stable instance to each evidence step.",
+    evidence_rejected:
+      "Chamber rejected the Terraform document after safe validation; no revision or binding was created.",
+  };
+}
 
-function diagnosticAnnotation(diagnostic: Diagnostic): string {
+function diagnosticAnnotation(
+  diagnostic: Diagnostic,
+  tool: TerraformTool,
+): string {
   return (
-    DIAGNOSTIC_MESSAGES[diagnostic.code] ??
+    diagnosticMessages(tool)[diagnostic.code] ??
     `Chamber reported diagnostic ${diagnostic.code}.`
   );
 }
 
-function emitDiagnostic(core: ActionCore, diagnostic: Diagnostic): void {
-  const message = diagnosticAnnotation(diagnostic);
+function emitDiagnostic(
+  core: ActionCore,
+  diagnostic: Diagnostic,
+  tool: TerraformTool = "terraform",
+): void {
+  const message = diagnosticAnnotation(diagnostic, tool);
   switch (diagnostic.severity) {
     case "notice":
       core.notice(message);
@@ -124,11 +140,14 @@ export async function executeAction(
 ): Promise<ActionExecution> {
   const env = dependencies.env ?? process.env;
   const runCommand = dependencies.runCommand ?? runBoundedCommand;
-  const spawnShow = dependencies.spawnShow ?? spawnTerraformShow;
   const now = dependencies.now ?? (() => new Date());
   const newSubmissionID = dependencies.newSubmissionID ?? randomUUID;
   const submit = dependencies.submit ?? submitWithFreshOIDC;
   const inputs = readInputs((name) => dependencies.core.getInput(name));
+  const tool = await resolveTool(inputs.tool, env);
+  const spawnShow: ShowSpawner =
+    dependencies.spawnShow ??
+    ((args, cwd) => spawnToolShow(tool.tool, args, cwd));
   const paths = await resolvePaths(
     env.GITHUB_WORKSPACE,
     inputs.workingDirectory,
@@ -152,6 +171,7 @@ export async function executeAction(
     paths.workingDirectoryAbsolute,
     inputs.evidence,
     inputs.instance,
+    tool.tool,
   );
   const submissionID = newSubmissionID();
   if (
@@ -179,6 +199,7 @@ export async function executeAction(
     action_version: ACTION_VERSION,
     capture_started_at: now().toISOString(),
     capture_status: "pending",
+    ...(tool.known ? { tool: tool.tool } : {}),
     ...(selection.instance === undefined
       ? {}
       : { instance: selection.instance }),
@@ -227,7 +248,7 @@ export async function executeAction(
       if (bodyInvoked) {
         throw new SafeError(
           "capture_replay_blocked",
-          "The Action refused to rerun Terraform under one submission.",
+          `The Action refused to rerun ${TOOL_NAMES[tool.tool]} under one submission.`,
         );
       }
       bodyInvoked = true;
@@ -252,6 +273,7 @@ export async function executeAction(
       ? {}
       : { capture: submission.capture }),
     attempts: submission.attempts,
+    tool: tool.tool,
   };
 }
 
@@ -267,18 +289,22 @@ export async function runAction(
     const execution = await executeAction(dependencies);
     writeReceiptOutputs(core, execution.receipt);
     for (const diagnostic of execution.receipt.diagnostics) {
-      emitDiagnostic(core, diagnostic);
+      emitDiagnostic(core, diagnostic, execution.tool);
     }
     if (execution.capture?.diagnosticCode !== undefined) {
-      emitDiagnostic(core, {
-        code: execution.capture.diagnosticCode,
-        severity:
-          execution.capture.captureStatus === "failed" ? "warning" : "notice",
-        message: "safe client diagnostic",
-      });
+      emitDiagnostic(
+        core,
+        {
+          code: execution.capture.diagnosticCode,
+          severity:
+            execution.capture.captureStatus === "failed" ? "warning" : "notice",
+          message: "safe client diagnostic",
+        },
+        execution.tool,
+      );
     }
     core.info(
-      `Chamber recorded Terraform ${execution.receipt.evidence_kind} evidence with status ${execution.receipt.status}.`,
+      `Chamber recorded ${TOOL_NAMES[execution.tool]} ${execution.receipt.evidence_kind} evidence with status ${execution.receipt.status}.`,
     );
     if (
       failureMode === "error" &&

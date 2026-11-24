@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import type { ClientRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,7 +32,7 @@ async function workspace(): Promise<string> {
   return root;
 }
 
-function commandRunner(): CommandRunner {
+function commandRunner(tool = "terraform"): CommandRunner {
   return async (executable, args) => {
     if (executable === "git") {
       assert.deepEqual(args, ["rev-parse", "HEAD"]);
@@ -43,6 +43,7 @@ function commandRunner(): CommandRunner {
         stderrTruncated: false,
       };
     }
+    assert.equal(executable, tool);
     assert.deepEqual(args, ["workspace", "show"]);
     return {
       exitCode: 0,
@@ -93,6 +94,8 @@ void test("builds exact explicit StartV1 and requests exact OIDC audience", asyn
         request.start.capture_started_at,
         "2026-08-12T10:11:12.000Z",
       );
+      // Neither tool is on this PATH, so the Action doesn't claim one.
+      assert.equal("tool" in request.start, false);
       const freshToken = await request.getOIDCToken();
       assert.equal(freshToken, token);
       const destination = new MemoryDestination();
@@ -244,3 +247,82 @@ for (const production of [true, false]) {
     ]);
   });
 }
+
+void test("runs and reports the tool the input names", async () => {
+  const root = await workspace();
+  const token = fakeJWT({
+    repository_id: "123456789",
+    run_id: "987654321",
+    run_attempt: "2",
+    check_run_id: "555555",
+    jti: "action-test-jti",
+  });
+  const core = new FakeCore(
+    {
+      evidence: "plan",
+      "working-directory": "terraform/prod",
+      "plan-file": "saved.tfplan",
+      tool: "tofu",
+      endpoint: "https://example.test/evidence",
+    },
+    [token],
+  );
+  let submittedBody = "";
+  const execution = await executeAction({
+    core,
+    env: { GITHUB_WORKSPACE: root, GITHUB_SHA: githubSHA },
+    runCommand: commandRunner("tofu"),
+    spawnShow: () => showProcess(['{"format_version":"1.2"}']),
+    now: () => new Date("2026-08-12T10:11:12Z"),
+    newSubmissionID: () => "018f47a1-91e4-7cc5-91fe-2f5f5d7a9d10",
+    submit: async (request) => {
+      assert.equal(request.start.tool, "tofu");
+      const destination = new MemoryDestination();
+      const capture = await request.writeBody(
+        destination as unknown as ClientRequest,
+        "action-test-boundary",
+        new AbortController().signal,
+        request.start,
+      );
+      destination.end();
+      submittedBody = destination.body().toString("latin1");
+      return {
+        response: { statusCode: 202, headers: {}, body: receipt },
+        capture,
+        attempts: 1,
+        idempotencyKey:
+          "sha256=e8493bb4610c15c987d761986e3f61edb464a9e06f5f78e2b9280bc06bbea17a",
+      };
+    },
+  });
+  assert.equal(execution.tool, "tofu");
+  assert.match(submittedBody, /"tool":"tofu"/u);
+});
+
+void test("asks for the tool input when terraform and tofu are both installed", async () => {
+  const root = await workspace();
+  const bin = path.join(root, "bin");
+  await mkdir(bin);
+  for (const name of ["terraform", "tofu"]) {
+    await writeFile(path.join(bin, name), "#!/bin/sh\n");
+    await chmod(path.join(bin, name), 0o755);
+  }
+  const core = new FakeCore({
+    evidence: "plan",
+    "plan-file": "saved.tfplan",
+    "working-directory": "terraform/prod",
+    "failure-mode": "error",
+  });
+  await runAction({
+    core,
+    env: { GITHUB_WORKSPACE: root, GITHUB_SHA: githubSHA, PATH: bin },
+    runCommand: commandRunner(),
+    submit: () => {
+      throw new Error("nothing is submitted");
+    },
+  });
+  assert.equal(core.outputs.get("status"), "action_failed");
+  assert.deepEqual(core.failures, [
+    "Both terraform and tofu are installed; set the tool input to the one that ran this root.",
+  ]);
+});
